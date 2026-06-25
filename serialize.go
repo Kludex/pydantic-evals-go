@@ -34,20 +34,25 @@ func (r *Registry[I, O, M]) Register(name string, factory EvaluatorFactory[I, O,
 func (r *Registry[I, O, M]) RegisterDefaults() {
 	r.Register("Equals", func(spec EvaluatorSpec) (Evaluator[I, O, M], error) {
 		e := Equals[I, O, M]{}
+		raw := spec.Kwargs["value"]
 		if len(spec.Args) == 1 {
-			e.Value = spec.Args[0]
+			raw = spec.Args[0]
 		} else {
-			e.Value = spec.Kwargs["value"]
-			e.EvaluationName, _ = spec.Kwargs["evaluation_name"].(string)
+			e.Name, _ = spec.Kwargs["evaluation_name"].(string)
 		}
+		value, err := convertVia[O](raw)
+		if err != nil {
+			return nil, fmt.Errorf("Equals value: %w", err)
+		}
+		e.Value = value
 		return e, nil
 	})
 	r.Register("EqualsExpected", func(spec EvaluatorSpec) (Evaluator[I, O, M], error) {
 		e := EqualsExpected[I, O, M]{}
 		if name, ok := spec.Kwargs["evaluation_name"].(string); ok {
-			e.EvaluationName = name
+			e.Name = name
 		} else if len(spec.Args) == 1 {
-			e.EvaluationName, _ = spec.Args[0].(string)
+			e.Name, _ = spec.Args[0].(string)
 		}
 		return e, nil
 	})
@@ -59,7 +64,7 @@ func (r *Registry[I, O, M]) RegisterDefaults() {
 			e.Value = spec.Kwargs["value"]
 			e.CaseSensitive, _ = spec.Kwargs["case_sensitive"].(bool)
 			e.AsStrings, _ = spec.Kwargs["as_strings"].(bool)
-			e.EvaluationName, _ = spec.Kwargs["evaluation_name"].(string)
+			e.Name, _ = spec.Kwargs["evaluation_name"].(string)
 		}
 		return e, nil
 	})
@@ -73,7 +78,7 @@ func (r *Registry[I, O, M]) RegisterDefaults() {
 			e.TypeName = name
 		} else {
 			e.TypeName, _ = spec.Kwargs["type_name"].(string)
-			e.EvaluationName, _ = spec.Kwargs["evaluation_name"].(string)
+			e.Name, _ = spec.Kwargs["evaluation_name"].(string)
 		}
 		if e.TypeName == "" {
 			return nil, fmt.Errorf("IsInstance requires a type_name")
@@ -277,7 +282,7 @@ func (d *Dataset[I, O, M]) Save(opts SaveOptions) ([]byte, error) {
 
 	df := datasetFile{Schema: opts.Schema, Name: d.Name}
 	for _, e := range d.Evaluators {
-		df.Evaluators = append(df.Evaluators, e.Spec().shortForm())
+		df.Evaluators = append(df.Evaluators, evaluatorSpec[I, O, M](e).shortForm())
 	}
 	for _, c := range d.Cases {
 		cf := caseFile{Name: c.Name, Inputs: c.Inputs}
@@ -288,7 +293,7 @@ func (d *Dataset[I, O, M]) Save(opts SaveOptions) ([]byte, error) {
 			cf.ExpectedOutput = c.ExpectedOutput
 		}
 		for _, e := range c.Evaluators {
-			cf.Evaluators = append(cf.Evaluators, e.Spec().shortForm())
+			cf.Evaluators = append(cf.Evaluators, evaluatorSpec[I, O, M](e).shortForm())
 		}
 		df.Cases = append(df.Cases, cf)
 	}

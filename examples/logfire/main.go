@@ -47,9 +47,9 @@ func configureLogfire(ctx context.Context, token string) (func(context.Context) 
 // answerLength scores by closeness of the output length to the expected length.
 type answerLength struct{}
 
-func (answerLength) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, map[string]any]) (evals.EvaluatorOutput, error) {
+func (answerLength) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, map[string]any]) (evals.Output, error) {
 	if !ec.HasExpectedOutput {
-		return evals.ScalarMapOutput{}, nil
+		return evals.NoResult(), nil
 	}
 	diff := len(ec.Output) - len(ec.ExpectedOutput)
 	if diff < 0 {
@@ -59,36 +59,28 @@ func (answerLength) Evaluate(_ context.Context, ec *evals.EvaluatorContext[strin
 	if score < 0 {
 		score = 0
 	}
-	return evals.Reason(evals.Float(score), fmt.Sprintf("length diff %d", diff)), nil
+	return evals.Score(score).WithReason(fmt.Sprintf("length diff %d", diff)), nil
 }
-
-func (answerLength) Spec() evals.EvaluatorSpec { return evals.NewSpec("AnswerLength") }
 
 // sentiment labels the output as a category.
 type sentiment struct{}
 
-func (sentiment) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, map[string]any]) (evals.EvaluatorOutput, error) {
-	switch {
-	case strings.Contains(ec.Output, "!"):
-		return evals.ScalarValue(evals.Label("excited")), nil
-	default:
-		return evals.ScalarValue(evals.Label("neutral")), nil
+func (sentiment) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, map[string]any]) (evals.Output, error) {
+	if strings.Contains(ec.Output, "!") {
+		return evals.Category("excited"), nil
 	}
+	return evals.Category("neutral"), nil
 }
-
-func (sentiment) Spec() evals.EvaluatorSpec { return evals.NewSpec("Sentiment") }
 
 // flaky errors for a specific input, to exercise the evaluator-failure path.
 type flaky struct{}
 
-func (flaky) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, map[string]any]) (evals.EvaluatorOutput, error) {
+func (flaky) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, map[string]any]) (evals.Output, error) {
 	if ec.Inputs == "boom" {
 		return nil, fmt.Errorf("flaky evaluator exploded on %q", ec.Inputs)
 	}
-	return evals.ScalarValue(evals.Bool(true)), nil
+	return evals.Assertion(true), nil
 }
-
-func (flaky) Spec() evals.EvaluatorSpec { return evals.NewSpec("Flaky") }
 
 func main() {
 	token := os.Getenv("LOGFIRE_TOKEN")
@@ -112,36 +104,14 @@ func main() {
 		}
 	}()
 
-	cases := []evals.Case[string, string, map[string]any]{
-		evals.NewCase[string, string, map[string]any]("hi",
-			evals.WithCaseName[string, string, map[string]any]("greeting"),
-			evals.WithExpectedOutput[string, string, map[string]any]("hello"),
-			evals.WithMetadata[string, string, map[string]any](map[string]any{"difficulty": "easy"}),
-		),
-		evals.NewCase[string, string, map[string]any]("loud",
-			evals.WithCaseName[string, string, map[string]any]("exclaim"),
-			evals.WithExpectedOutput[string, string, map[string]any]("WOW!"),
-		),
-		evals.NewCase[string, string, map[string]any]("boom",
-			evals.WithCaseName[string, string, map[string]any]("evaluator_error"),
-			evals.WithExpectedOutput[string, string, map[string]any]("kaboom"),
-		),
-		evals.NewCase[string, string, map[string]any]("explode",
-			evals.WithCaseName[string, string, map[string]any]("task_error"),
-		),
-	}
+	s := evals.For[string, string, map[string]any]()
 
-	dataset, err := evals.NewDataset[string, string, map[string]any](
-		"demo_suite", cases,
-		evals.EqualsExpected[string, string, map[string]any]{},
-		answerLength{},
-		sentiment{},
-		flaky{},
-	)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "new dataset:", err)
-		os.Exit(1)
-	}
+	dataset := s.Dataset("demo_suite",
+		s.Case("hi").Name("greeting").Expect("hello").Meta(map[string]any{"difficulty": "easy"}),
+		s.Case("loud").Name("exclaim").Expect("WOW!"),
+		s.Case("boom").Name("evaluator_error").Expect("kaboom"),
+		s.Case("explode").Name("task_error"),
+	).With(s.EqualsExpected(), answerLength{}, sentiment{}, flaky{})
 
 	task := func(ctx context.Context, input string) (string, error) {
 		if input == "explode" {
@@ -161,12 +131,12 @@ func main() {
 		}
 	}
 
-	report, err := dataset.Evaluate(ctx, task,
-		evals.WithName[string, string, map[string]any]("demo_experiment"),
-		evals.WithTaskName[string, string, map[string]any]("echo_task"),
-		evals.WithExperimentMetadata[string, string, map[string]any](map[string]any{"model": "demo-v1", "run": "ci"}),
-		evals.WithRepeat[string, string, map[string]any](2),
-	)
+	report, err := dataset.Evaluate(ctx, task, evals.Config{
+		Name:     "demo_experiment",
+		TaskName: "echo_task",
+		Metadata: map[string]any{"model": "demo-v1", "run": "ci"},
+		Repeat:   2,
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "evaluate:", err)
 		os.Exit(1)

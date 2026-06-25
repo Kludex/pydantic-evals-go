@@ -12,35 +12,23 @@ import (
 // substring match, and 0.0 otherwise.
 type matchAnswer struct{}
 
-func (matchAnswer) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, any]) (evals.EvaluatorOutput, error) {
+func (matchAnswer) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, string, any]) (evals.Output, error) {
 	switch {
 	case ec.Output == ec.ExpectedOutput:
-		return evals.ScalarValue(evals.Float(1.0)), nil
+		return evals.Score(1.0), nil
 	case strings.Contains(strings.ToLower(ec.Output), strings.ToLower(ec.ExpectedOutput)):
-		return evals.ScalarValue(evals.Float(0.8)), nil
+		return evals.Score(0.8), nil
 	default:
-		return evals.ScalarValue(evals.Float(0.0)), nil
+		return evals.Score(0.0), nil
 	}
 }
 
-func (matchAnswer) Spec() evals.EvaluatorSpec { return evals.NewSpec("MatchAnswer") }
-
 func main() {
-	c := evals.NewCase[string, string, any](
-		"What is the capital of France?",
-		evals.WithCaseName[string, string, any]("capital_question"),
-		evals.WithExpectedOutput[string, string, any]("Paris"),
-	)
+	s := evals.For[string, string, any]()
 
-	dataset, err := evals.NewDataset[string, string, any](
-		"capital_eval",
-		[]evals.Case[string, string, any]{c},
-		evals.IsInstance[string, string, any]{TypeName: "string"},
-		matchAnswer{},
-	)
-	if err != nil {
-		panic(err)
-	}
+	dataset := s.Dataset("capital_eval",
+		s.Case("What is the capital of France?").Name("capital_question").Expect("Paris"),
+	).With(s.IsInstance("string"), matchAnswer{})
 
 	answer := func(_ context.Context, question string) (string, error) {
 		return "Paris", nil

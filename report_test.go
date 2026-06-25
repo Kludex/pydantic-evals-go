@@ -1,458 +1,436 @@
-package evals
+package evals_test
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"sync"
 	"testing"
+
+	evals "github.com/pydantic/pydantic-evals-go"
 )
 
-// reportEmitEvaluator returns a fixed set of named scalar results, letting a test
-// control exactly which assertions/scores/labels a case produces.
-type reportEmitEvaluator struct {
-	name    string
-	results map[string]Scalar
+// reportScorer emits a score, an assertion and a label under fixed names, with
+// values driven by the evaluator's configuration.
+type reportScorer struct {
+	score float64
+	pass  bool
+	label string
 }
 
-func (e reportEmitEvaluator) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, string]) (EvaluatorOutput, error) {
-	return ScalarMapOutput(e.results), nil
+func (e reportScorer) EvaluationName() string { return "scorer" }
+
+func (e reportScorer) Evaluate(_ context.Context, _ *evals.EvaluatorContext[int, int, any]) (evals.Output, error) {
+	return evals.Named(
+		"score", evals.Score(e.score),
+		"passed", evals.Assertion(e.pass),
+		"label", evals.Category(e.label),
+	), nil
 }
 
-func (e reportEmitEvaluator) Spec() EvaluatorSpec { return NewSpec(e.name) }
+// reportIntScorer emits an integer score only, under a distinct report name.
+type reportIntScorer struct{ value int }
 
-// reportMetricEvaluator emits a single score equal to the value of a recorded metric,
-// so a test can confirm metrics survive into the evaluator context.
-type reportMetricEvaluator struct {
-	metricName string
-	resultName string
+func (e reportIntScorer) EvaluationName() string { return "intscore" }
+
+func (e reportIntScorer) Evaluate(_ context.Context, _ *evals.EvaluatorContext[int, int, any]) (evals.Output, error) {
+	return evals.ScoreInt(e.value), nil
 }
 
-func (e reportMetricEvaluator) Evaluate(_ context.Context, ec *EvaluatorContext[string, string, string]) (EvaluatorOutput, error) {
-	return ScalarMapOutput{e.resultName: Float(ec.Metrics[e.metricName])}, nil
+// reportOutputLabel emits a label whose value depends on the task output, so
+// repeated runs whose output varies produce a distribution of labels. The metric
+// it reads is recorded by the task via IncrementMetric.
+type reportOutputLabel struct{}
+
+func (reportOutputLabel) EvaluationName() string { return "x" }
+
+func (reportOutputLabel) Evaluate(_ context.Context, ec *evals.EvaluatorContext[int, int, any]) (evals.Output, error) {
+	value := "even"
+	if ec.Output%2 != 0 {
+		value = "odd"
+	}
+	return evals.Named("label", evals.Category(value)), nil
 }
 
-func (e reportMetricEvaluator) Spec() EvaluatorSpec { return NewSpec("metric") }
+func identityTask(_ context.Context, in int) (int, error) { return in, nil }
 
-func reportOKTask(_ context.Context, in string) (string, error) { return in, nil }
+// metricTask returns its input unchanged after recording a "tokens" metric on the
+// task run, so the resulting ReportCase carries that metric for aggregation.
+func metricTask(amount float64) evals.TaskFunc[int, int] {
+	return func(ctx context.Context, in int) (int, error) {
+		evals.IncrementMetric(ctx, "tokens", amount)
+		return in, nil
+	}
+}
 
-func newReportDataset(t *testing.T, cases []Case[string, string, string], evals ...Evaluator[string, string, string]) *Dataset[string, string, string] {
+func mustDataset(t *testing.T, name string, cases []evals.Case[int, int, any], evaluators ...evals.Evaluator[int, int, any]) *evals.Dataset[int, int, any] {
 	t.Helper()
-	ds, err := NewDataset("ds", cases, evals...)
+	ds, err := evals.NewDataset[int, int, any](name, cases, evaluators...)
 	if err != nil {
 		t.Fatalf("NewDataset: %v", err)
 	}
 	return ds
 }
 
-func runReport(t *testing.T, ds *Dataset[string, string, string], task TaskFunc[string, string], opts ...EvaluateOption[string, string, string]) *EvaluationReport[string, string, string] {
+func mustEvaluate(t *testing.T, ds *evals.Dataset[int, int, any], task evals.TaskFunc[int, int], cfg ...evals.Config) *evals.EvaluationReport[int, int, any] {
 	t.Helper()
-	report, err := ds.Evaluate(context.Background(), task, opts...)
+	report, err := ds.Evaluate(context.Background(), task, cfg...)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	return report
 }
 
-func TestAveragesNoCases(t *testing.T) {
-	ds := newReportDataset(t, nil)
-	report := runReport(t, ds, reportOKTask)
-
-	if report.CaseGroups() != nil {
-		t.Fatalf("CaseGroups should be nil for an empty single-run report")
+func groupByName(t *testing.T, groups []evals.ReportCaseGroup[int, int, any], name string) evals.ReportCaseGroup[int, int, any] {
+	t.Helper()
+	for _, g := range groups {
+		if g.Name == name {
+			return g
+		}
 	}
-	if avg := report.Averages(); avg != nil {
-		t.Fatalf("Averages should be nil with no cases, got %+v", avg)
+	t.Fatalf("group %q not found in %d groups", name, len(groups))
+	return evals.ReportCaseGroup[int, int, any]{}
+}
+
+func TestAveragesNilForNoCases(t *testing.T) {
+	ds := mustDataset(t, "empty", nil)
+	report := mustEvaluate(t, ds, identityTask)
+	if report.Averages() != nil {
+		t.Fatalf("expected nil averages for a report with no cases, got %+v", report.Averages())
+	}
+	if report.CaseGroups() != nil {
+		t.Fatalf("expected nil case groups for an empty single-run report")
 	}
 }
 
 func TestAveragesSingleRun(t *testing.T) {
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("hi", WithCaseName[string, string, string]("a"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name: "e",
-				results: map[string]Scalar{
-					"pass":  Bool(true),
-					"score": Int(2),
-					"kind":  Label("x"),
-				},
-			})),
-		NewCase[string, string, string]("yo", WithCaseName[string, string, string]("b"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name: "e",
-				results: map[string]Scalar{
-					"pass":  Bool(false),
-					"score": Int(4),
-					"kind":  Label("y"),
-				},
-			})),
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("a"),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 0.0, pass: true, label: "x"})),
+		evals.NewCase[int, int, any](2, evals.WithCaseName[int, int, any]("b"),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 1.0, pass: false, label: "y"})),
 	}
-	report := runReport(t, newReportDataset(t, cases), func(ctx context.Context, in string) (string, error) {
-		IncrementMetric(ctx, "calls", 1)
-		return in, nil
-	})
+	ds := mustDataset(t, "single", cases)
+
+	report := mustEvaluate(t, ds, metricTask(3))
 
 	if report.CaseGroups() != nil {
-		t.Fatalf("CaseGroups should be nil for a single-run report")
+		t.Fatalf("expected nil case groups for a single-run report")
 	}
 
 	avg := report.Averages()
 	if avg == nil {
-		t.Fatal("Averages should be non-nil with cases")
+		t.Fatalf("expected non-nil averages")
 	}
 	if avg.Name != "Averages" {
-		t.Fatalf("aggregate name = %q, want %q", avg.Name, "Averages")
+		t.Fatalf("expected aggregate name %q, got %q", "Averages", avg.Name)
 	}
-	if got := avg.Scores["score"]; got != 3 {
-		t.Fatalf("avg score = %v, want 3", got)
+
+	if got := avg.Scores["score"]; got != 0.5 {
+		t.Fatalf("expected averaged score 0.5, got %v", got)
 	}
-	if got := avg.Metrics["calls"]; got != 1 {
-		t.Fatalf("avg metric calls = %v, want 1", got)
+	if got := avg.Metrics["tokens"]; got != 3 {
+		t.Fatalf("expected averaged metric 3, got %v", got)
 	}
-	// One pass, one fail -> pass rate 0.5.
+
 	if avg.Assertions == nil {
-		t.Fatal("Assertions should be non-nil when assertions are present")
+		t.Fatalf("expected non-nil assertions pass rate")
 	}
 	if *avg.Assertions != 0.5 {
-		t.Fatalf("assertion pass rate = %v, want 0.5", *avg.Assertions)
+		t.Fatalf("expected assertions pass rate 0.5, got %v", *avg.Assertions)
 	}
-	// Each label value occurs once across two cases -> 0.5 fraction each.
-	dist := avg.Labels["kind"]
+
+	dist := avg.Labels["label"]
 	if dist["x"] != 0.5 || dist["y"] != 0.5 {
-		t.Fatalf("label distribution = %v, want x=0.5,y=0.5", dist)
+		t.Fatalf("expected label distribution {x:0.5, y:0.5}, got %v", dist)
 	}
-	if avg.TaskDuration < 0 {
-		t.Fatalf("TaskDuration should be non-negative, got %v", avg.TaskDuration)
-	}
-	if avg.TotalDuration < 0 {
-		t.Fatalf("TotalDuration should be non-negative, got %v", avg.TotalDuration)
+
+	if avg.TaskDuration < 0 || avg.TotalDuration < 0 {
+		t.Fatalf("expected non-negative durations, got task=%v total=%v", avg.TaskDuration, avg.TotalDuration)
 	}
 }
 
-func TestAveragesNoAssertions(t *testing.T) {
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("hi", WithCaseName[string, string, string]("a"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name:    "e",
-				results: map[string]Scalar{"score": Float(1.5)},
-			})),
+func TestAveragesAssertionsNilWhenNoAssertions(t *testing.T) {
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("a"),
+			evals.WithCaseEvaluators[int, int, any](reportIntScorer{value: 3})),
+		evals.NewCase[int, int, any](2, evals.WithCaseName[int, int, any]("b"),
+			evals.WithCaseEvaluators[int, int, any](reportIntScorer{value: 5})),
 	}
-	avg := runReport(t, newReportDataset(t, cases), reportOKTask).Averages()
+	ds := mustDataset(t, "noassert", cases)
+
+	avg := mustEvaluate(t, ds, identityTask).Averages()
 	if avg == nil {
-		t.Fatal("Averages should be non-nil")
+		t.Fatalf("expected non-nil averages")
 	}
 	if avg.Assertions != nil {
-		t.Fatalf("Assertions should be nil when no assertions present, got %v", *avg.Assertions)
+		t.Fatalf("expected nil assertions when no assertions were emitted, got %v", *avg.Assertions)
 	}
-	if got := avg.Scores["score"]; got != 1.5 {
-		t.Fatalf("avg score = %v, want 1.5", got)
+	if got := avg.Scores["intscore"]; got != 4 {
+		t.Fatalf("expected averaged int score 4, got %v", got)
+	}
+	if len(avg.Labels) != 0 {
+		t.Fatalf("expected no labels, got %v", avg.Labels)
 	}
 }
 
-func TestCaseGroupsMultiRun(t *testing.T) {
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("in-a",
-			WithCaseName[string, string, string]("a"),
-			WithMetadata[string, string, string]("meta-a"),
-			WithExpectedOutput[string, string, string]("exp-a"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name:    "e",
-				results: map[string]Scalar{"pass": Bool(true), "score": Int(10)},
-			})),
-		NewCase[string, string, string]("in-b",
-			WithCaseName[string, string, string]("b"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name:    "e",
-				results: map[string]Scalar{"pass": Bool(true), "score": Int(20)},
-			})),
+func TestCaseGroupsPopulatedForRepeat(t *testing.T) {
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("only"),
+			evals.WithMetadata[int, int, any]("m"),
+			evals.WithExpectedOutput[int, int, any](1),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 1.0, pass: true, label: "ok"})),
 	}
-	report := runReport(t, newReportDataset(t, cases), reportOKTask, WithRepeat[string, string, string](2))
+	ds := mustDataset(t, "repeated", cases)
+
+	report := mustEvaluate(t, ds, metricTask(1), evals.Config{Repeat: 3})
 
 	groups := report.CaseGroups()
-	if groups == nil {
-		t.Fatal("CaseGroups should be populated for a multi-run report")
+	if len(groups) != 1 {
+		t.Fatalf("expected exactly 1 group, got %d", len(groups))
 	}
-	if len(groups) != 2 {
-		t.Fatalf("len(groups) = %d, want 2", len(groups))
-	}
-
 	g := groups[0]
-	if g.Name != "a" {
-		t.Fatalf("first group name = %q, want %q", g.Name, "a")
+	if g.Name != "only" {
+		t.Fatalf("expected group name %q, got %q", "only", g.Name)
 	}
-	if len(g.Runs) != 2 {
-		t.Fatalf("group a runs = %d, want 2", len(g.Runs))
+	if len(g.Runs) != 3 {
+		t.Fatalf("expected 3 runs in the group, got %d", len(g.Runs))
 	}
 	if len(g.Failures) != 0 {
-		t.Fatalf("group a failures = %d, want 0", len(g.Failures))
-	}
-	// Group identity fields come from the first run.
-	if g.Inputs != "in-a" {
-		t.Fatalf("group Inputs = %q, want %q", g.Inputs, "in-a")
-	}
-	if !g.HasMetadata || g.Metadata != "meta-a" {
-		t.Fatalf("group Metadata = %q (has=%v), want %q", g.Metadata, g.HasMetadata, "meta-a")
-	}
-	if !g.HasExpectedOutput || g.ExpectedOutput != "exp-a" {
-		t.Fatalf("group ExpectedOutput = %q (has=%v), want %q", g.ExpectedOutput, g.HasExpectedOutput, "exp-a")
+		t.Fatalf("expected no failures in the group, got %d", len(g.Failures))
 	}
 
-	// Summary averages the two identical runs of group a.
-	if g.Summary.Name != "Averages" {
-		t.Fatalf("summary name = %q, want %q", g.Summary.Name, "Averages")
+	if g.Inputs != 1 {
+		t.Fatalf("expected group inputs taken from first run (1), got %v", g.Inputs)
 	}
-	if got := g.Summary.Scores["score"]; got != 10 {
-		t.Fatalf("group a summary score = %v, want 10", got)
+	if !g.HasMetadata || g.Metadata != "m" {
+		t.Fatalf("expected group metadata %q from first run, got hasMeta=%v meta=%v", "m", g.HasMetadata, g.Metadata)
 	}
-	if g.Summary.Assertions == nil || *g.Summary.Assertions != 1 {
-		t.Fatalf("group a summary assertions = %v, want 1", g.Summary.Assertions)
+	if !g.HasExpectedOutput || g.ExpectedOutput != 1 {
+		t.Fatalf("expected group expected output 1 from first run, got hasExp=%v exp=%v", g.HasExpectedOutput, g.ExpectedOutput)
 	}
 
-	// Per-run report case names carry the run index and source case name.
-	if got := report.Cases[0].SourceCaseName; got != "a" {
-		t.Fatalf("first case SourceCaseName = %q, want %q", got, "a")
-	}
-	if got := report.Cases[0].Name; got != "a [1/2]" {
-		t.Fatalf("first case Name = %q, want %q", got, "a [1/2]")
-	}
-}
-
-func TestCaseGroupsGroupWithRunsAndFailures(t *testing.T) {
-	// The task fails on the second run of case a only, so group a has both a
-	// successful run and a failure.
-	var runs int
-	task := func(ctx context.Context, in string) (string, error) {
-		runs++
-		if in == "boom" && runs == 2 {
-			return "", fmt.Errorf("kaboom")
+	for i, run := range g.Runs {
+		if run.SourceCaseName != "only" {
+			t.Fatalf("run %d: expected source case name %q, got %q", i, "only", run.SourceCaseName)
 		}
-		return in, nil
 	}
 
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("boom",
-			WithCaseName[string, string, string]("a"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name:    "e",
-				results: map[string]Scalar{"pass": Bool(true), "score": Int(5)},
-			})),
+	sum := g.Summary
+	if sum.Name != "Averages" {
+		t.Fatalf("expected summary name %q, got %q", "Averages", sum.Name)
 	}
-	report := runReport(t, newReportDataset(t, cases), task,
-		WithRepeat[string, string, string](2), WithMaxConcurrency[string, string, string](1))
-
-	groups := report.CaseGroups()
-	if len(groups) != 1 {
-		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	if sum.Scores["score"] != 1.0 {
+		t.Fatalf("expected summary score 1.0, got %v", sum.Scores["score"])
 	}
-	g := groups[0]
-	if len(g.Runs) != 1 {
-		t.Fatalf("group runs = %d, want 1", len(g.Runs))
+	if sum.Metrics["tokens"] != 1 {
+		t.Fatalf("expected summary metric 1, got %v", sum.Metrics["tokens"])
 	}
-	if len(g.Failures) != 1 {
-		t.Fatalf("group failures = %d, want 1", len(g.Failures))
+	if sum.Assertions == nil || *sum.Assertions != 1.0 {
+		t.Fatalf("expected summary assertions pass rate 1.0, got %v", sum.Assertions)
 	}
-	if g.Failures[0].SourceCaseName != "a" {
-		t.Fatalf("failure SourceCaseName = %q, want %q", g.Failures[0].SourceCaseName, "a")
-	}
-	// Identity still comes from the (single) run.
-	if g.Inputs != "boom" {
-		t.Fatalf("group Inputs = %q, want %q", g.Inputs, "boom")
-	}
-	// Summary averages only the successful run.
-	if got := g.Summary.Scores["score"]; got != 5 {
-		t.Fatalf("summary score = %v, want 5", got)
-	}
-
-	// Averages goes through CaseGroups and includes this group (it has a run).
-	avg := report.Averages()
-	if avg == nil {
-		t.Fatal("Averages should be non-nil")
-	}
-	if got := avg.Scores["score"]; got != 5 {
-		t.Fatalf("overall avg score = %v, want 5", got)
-	}
-}
-
-func TestCaseGroupsIdentityFromFirstFailure(t *testing.T) {
-	// Every run of the case fails, so the group only has failures and its
-	// identity must come from the first failure.
-	task := func(_ context.Context, _ string) (string, error) {
-		return "", fmt.Errorf("always fails")
-	}
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("only-fail-input",
-			WithCaseName[string, string, string]("a"),
-			WithMetadata[string, string, string]("fmeta"),
-			WithExpectedOutput[string, string, string]("fexp")),
-	}
-	report := runReport(t, newReportDataset(t, cases), task, WithRepeat[string, string, string](2))
-
-	groups := report.CaseGroups()
-	if len(groups) != 1 {
-		t.Fatalf("len(groups) = %d, want 1", len(groups))
-	}
-	g := groups[0]
-	if len(g.Runs) != 0 {
-		t.Fatalf("group runs = %d, want 0", len(g.Runs))
-	}
-	if len(g.Failures) != 2 {
-		t.Fatalf("group failures = %d, want 2", len(g.Failures))
-	}
-	if g.Inputs != "only-fail-input" {
-		t.Fatalf("group Inputs = %q, want %q", g.Inputs, "only-fail-input")
-	}
-	if !g.HasMetadata || g.Metadata != "fmeta" {
-		t.Fatalf("group Metadata = %q (has=%v), want %q", g.Metadata, g.HasMetadata, "fmeta")
-	}
-	if !g.HasExpectedOutput || g.ExpectedOutput != "fexp" {
-		t.Fatalf("group ExpectedOutput = %q (has=%v), want %q", g.ExpectedOutput, g.HasExpectedOutput, "fexp")
-	}
-	// A group with only failures contributes an empty-named "Averages" summary.
-	if g.Summary.Name != "Averages" || g.Summary.Scores != nil {
-		t.Fatalf("empty group summary = %+v", g.Summary)
-	}
-}
-
-func TestAveragesMultiRunWholeGroupOnlyFailures(t *testing.T) {
-	// Group a always fails; group b always succeeds. Averages must skip group a
-	// entirely and reflect only group b.
-	task := func(_ context.Context, in string) (string, error) {
-		if in == "fail" {
-			return "", fmt.Errorf("nope")
-		}
-		return in, nil
-	}
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("fail",
-			WithCaseName[string, string, string]("a"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name:    "e",
-				results: map[string]Scalar{"score": Int(100)},
-			})),
-		NewCase[string, string, string]("ok",
-			WithCaseName[string, string, string]("b"),
-			WithCaseEvaluators[string, string, string](reportEmitEvaluator{
-				name:    "e",
-				results: map[string]Scalar{"pass": Bool(true), "score": Int(7)},
-			})),
-	}
-	report := runReport(t, newReportDataset(t, cases), task, WithRepeat[string, string, string](2))
-
-	avg := report.Averages()
-	if avg == nil {
-		t.Fatal("Averages should be non-nil; group b has runs")
-	}
-	// Only group b's score should be reflected; group a (failures only) skipped.
-	if got, ok := avg.Scores["score"]; !ok || got != 7 {
-		t.Fatalf("overall avg score = %v (present=%v), want 7", got, ok)
-	}
-	if avg.Assertions == nil || *avg.Assertions != 1 {
-		t.Fatalf("overall assertions = %v, want 1", avg.Assertions)
-	}
-}
-
-func TestAveragesMultiRunAllGroupsOnlyFailures(t *testing.T) {
-	// Every group has only failures -> Averages returns nil.
-	task := func(_ context.Context, _ string) (string, error) {
-		return "", fmt.Errorf("nope")
-	}
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("x", WithCaseName[string, string, string]("a")),
-	}
-	report := runReport(t, newReportDataset(t, cases), task, WithRepeat[string, string, string](2))
-
-	if report.CaseGroups() == nil {
-		t.Fatal("CaseGroups should be populated when failures carry a SourceCaseName")
-	}
-	if avg := report.Averages(); avg != nil {
-		t.Fatalf("Averages should be nil when all groups have only failures, got %+v", avg)
-	}
-}
-
-func TestAveragesMultiRunLabelDistributionAndMetrics(t *testing.T) {
-	// One case, two runs producing different labels and a metric, so the
-	// per-group distribution is 0.5/0.5 and the metric averages cleanly.
-	var runs int
-	task := func(ctx context.Context, in string) (string, error) {
-		runs++
-		IncrementMetric(ctx, "tokens", 4)
-		return in, nil
-	}
-	labelFor := func() Scalar {
-		if runs%2 == 1 {
-			return Label("first")
-		}
-		return Label("second")
-	}
-	// Use a dataset-level evaluator that reads runs at evaluate time. To keep it
-	// deterministic per run we instead encode the label in the case via repeat:
-	// each run gets a distinct label by alternating.
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("only",
-			WithCaseName[string, string, string]("a"),
-			WithCaseEvaluators[string, string, string](reportAltLabel{fn: labelFor})),
-	}
-	report := runReport(t, newReportDataset(t, cases), task,
-		WithRepeat[string, string, string](2), WithMaxConcurrency[string, string, string](1))
-
-	groups := report.CaseGroups()
-	if len(groups) != 1 {
-		t.Fatalf("len(groups) = %d, want 1", len(groups))
-	}
-	dist := groups[0].Summary.Labels["kind"]
-	if dist["first"] != 0.5 || dist["second"] != 0.5 {
-		t.Fatalf("group label distribution = %v, want first=0.5,second=0.5", dist)
+	if sum.Labels["label"]["ok"] != 1.0 {
+		t.Fatalf("expected summary label ok=1.0, got %v", sum.Labels["label"])
 	}
 
 	avg := report.Averages()
 	if avg == nil {
-		t.Fatal("Averages should be non-nil")
+		t.Fatalf("expected non-nil averages for repeat experiment")
 	}
-	// Averaging the single group's distribution reproduces the 0.5/0.5 split.
-	adist := avg.Labels["kind"]
-	if adist["first"] != 0.5 || adist["second"] != 0.5 {
-		t.Fatalf("overall label distribution = %v, want first=0.5,second=0.5", adist)
+	if avg.Scores["score"] != 1.0 {
+		t.Fatalf("expected averaged score 1.0, got %v", avg.Scores["score"])
 	}
-	if got := avg.Metrics["tokens"]; got != 4 {
-		t.Fatalf("overall avg metric tokens = %v, want 4", got)
+	if avg.Metrics["tokens"] != 1 {
+		t.Fatalf("expected averaged metric 1, got %v", avg.Metrics["tokens"])
+	}
+	if avg.Assertions == nil || *avg.Assertions != 1.0 {
+		t.Fatalf("expected averaged assertions 1.0, got %v", avg.Assertions)
+	}
+	if avg.Labels["label"]["ok"] != 1.0 {
+		t.Fatalf("expected averaged label ok=1.0, got %v", avg.Labels["label"])
 	}
 	if avg.TaskDuration < 0 || avg.TotalDuration < 0 {
-		t.Fatalf("durations should be non-negative: task=%v total=%v", avg.TaskDuration, avg.TotalDuration)
+		t.Fatalf("expected non-negative averaged durations")
 	}
 }
 
-// reportAltLabel emits a "kind" label decided by fn at evaluate time, used to
-// give successive runs of the same case distinct labels.
-type reportAltLabel struct {
-	fn func() Scalar
+func TestCaseGroupsLabelDistributionSplit(t *testing.T) {
+	// Two runs of the same source case; the task output alternates so the
+	// evaluator produces a different label each run, giving each label 0.5.
+	var mu sync.Mutex
+	var n int
+	alternatingTask := func(_ context.Context, _ int) (int, error) {
+		mu.Lock()
+		n++
+		out := n
+		mu.Unlock()
+		return out, nil
+	}
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](0, evals.WithCaseName[int, int, any]("alt"),
+			evals.WithCaseEvaluators[int, int, any](reportOutputLabel{})),
+	}
+	ds := mustDataset(t, "alt", cases)
+
+	report := mustEvaluate(t, ds, alternatingTask, evals.Config{Repeat: 2, MaxConcurrency: 1})
+
+	groups := report.CaseGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	dist := groups[0].Summary.Labels["label"]
+	if dist["odd"] != 0.5 || dist["even"] != 0.5 {
+		t.Fatalf("expected label distribution {odd:0.5, even:0.5}, got %v", dist)
+	}
+
+	avg := report.Averages()
+	if avg.Labels["label"]["odd"] != 0.5 || avg.Labels["label"]["even"] != 0.5 {
+		t.Fatalf("expected averaged label distribution {odd:0.5, even:0.5}, got %v", avg.Labels["label"])
+	}
 }
 
-func (a reportAltLabel) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, string]) (EvaluatorOutput, error) {
-	return ScalarMapOutput{"kind": a.fn()}, nil
-}
-
-func (a reportAltLabel) Spec() EvaluatorSpec { return NewSpec("alt") }
-
-func TestAveragesDatasetLevelMetricEvaluator(t *testing.T) {
-	// Metrics recorded during the task flow into the evaluator context and are
-	// averaged into the report metrics.
-	task := func(ctx context.Context, in string) (string, error) {
-		IncrementMetric(ctx, "m", 3)
+func TestCaseGroupsMixedRunsAndFailures(t *testing.T) {
+	// The task fails exactly the first time it sees input 1, so the "flaky" group
+	// (input 1, repeated twice) ends with one failure and one successful run,
+	// while the "solid" group (input 2) is all successes.
+	var mu sync.Mutex
+	failed := false
+	flakyTask := func(_ context.Context, in int) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if in == 1 && !failed {
+			failed = true
+			return 0, errors.New("boom")
+		}
 		return in, nil
 	}
-	cases := []Case[string, string, string]{
-		NewCase[string, string, string]("one", WithCaseName[string, string, string]("a")),
-		NewCase[string, string, string]("two", WithCaseName[string, string, string]("b")),
+
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("flaky"),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 1.0, pass: true, label: "g"})),
+		evals.NewCase[int, int, any](2, evals.WithCaseName[int, int, any]("solid"),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 0.0, pass: false, label: "b"})),
 	}
-	ds := newReportDataset(t, cases, reportMetricEvaluator{metricName: "m", resultName: "mscore"})
-	report := runReport(t, ds, task)
+	ds := mustDataset(t, "mixed", cases)
+
+	report := mustEvaluate(t, ds, flakyTask, evals.Config{Repeat: 2, MaxConcurrency: 1})
+
+	groups := report.CaseGroups()
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	flaky := groupByName(t, groups, "flaky")
+	solid := groupByName(t, groups, "solid")
+
+	if len(flaky.Runs) != 1 {
+		t.Fatalf("expected flaky group to have 1 successful run, got %d", len(flaky.Runs))
+	}
+	if len(flaky.Failures) != 1 {
+		t.Fatalf("expected flaky group to have 1 failure, got %d", len(flaky.Failures))
+	}
+	if flaky.Failures[0].ErrorMessage != "boom" {
+		t.Fatalf("expected failure message %q, got %q", "boom", flaky.Failures[0].ErrorMessage)
+	}
+	if flaky.Failures[0].SourceCaseName != "flaky" {
+		t.Fatalf("expected failure source case name %q, got %q", "flaky", flaky.Failures[0].SourceCaseName)
+	}
+
+	if len(solid.Runs) != 2 || len(solid.Failures) != 0 {
+		t.Fatalf("expected solid group to have 2 runs and 0 failures, got runs=%d failures=%d", len(solid.Runs), len(solid.Failures))
+	}
+
+	// flaky's summary derives from its single successful run.
+	if flaky.Summary.Scores["score"] != 1.0 {
+		t.Fatalf("expected flaky summary score 1.0, got %v", flaky.Summary.Scores["score"])
+	}
+	// The overall averages span both groups: scores 1.0 and 0.0 -> 0.5.
+	avg := report.Averages()
+	if avg == nil {
+		t.Fatalf("expected non-nil averages")
+	}
+	if avg.Scores["score"] != 0.5 {
+		t.Fatalf("expected averaged score 0.5 across groups, got %v", avg.Scores["score"])
+	}
+	if avg.Assertions == nil || *avg.Assertions != 0.5 {
+		t.Fatalf("expected averaged assertions 0.5, got %v", avg.Assertions)
+	}
+}
+
+func TestAveragesSkipsFailureOnlyGroup(t *testing.T) {
+	// "good" always succeeds; "bad" always fails. With repeat, "bad" becomes a
+	// group with only failures, which Averages must skip; the overall average
+	// therefore reflects only "good".
+	failOnBad := func(_ context.Context, in int) (int, error) {
+		if in == 99 {
+			return 0, errors.New("always fails")
+		}
+		return in, nil
+	}
+
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("good"),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 0.8, pass: true, label: "g"})),
+		evals.NewCase[int, int, any](99, evals.WithCaseName[int, int, any]("bad"),
+			evals.WithCaseEvaluators[int, int, any](reportScorer{score: 0.0, pass: false, label: "b"})),
+	}
+	ds := mustDataset(t, "failgroup", cases)
+
+	report := mustEvaluate(t, ds, failOnBad, evals.Config{Repeat: 2})
+
+	groups := report.CaseGroups()
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+	bad := groupByName(t, groups, "bad")
+	if len(bad.Runs) != 0 || len(bad.Failures) != 2 {
+		t.Fatalf("expected bad group to be failure-only (0 runs, 2 failures), got runs=%d failures=%d", len(bad.Runs), len(bad.Failures))
+	}
+	// Failure-only group: its fields come from the first failure.
+	if bad.Inputs != 99 {
+		t.Fatalf("expected failure-only group inputs 99 from first failure, got %v", bad.Inputs)
+	}
+	// A failure-only group's summary has no runs, so it averages to an empty aggregate.
+	if bad.Summary.Assertions != nil {
+		t.Fatalf("expected failure-only group summary to have nil assertions, got %v", *bad.Summary.Assertions)
+	}
 
 	avg := report.Averages()
 	if avg == nil {
-		t.Fatal("Averages should be non-nil")
+		t.Fatalf("expected non-nil averages (the 'good' group still has runs)")
 	}
-	if got := avg.Metrics["m"]; got != 3 {
-		t.Fatalf("avg metric m = %v, want 3", got)
+	// Only the "good" group contributes -> score 0.8, assertions 1.0.
+	if avg.Scores["score"] != 0.8 {
+		t.Fatalf("expected averaged score 0.8 (failure-only group skipped), got %v", avg.Scores["score"])
 	}
-	if got := avg.Scores["mscore"]; got != 3 {
-		t.Fatalf("avg score mscore = %v, want 3", got)
+	if avg.Assertions == nil || *avg.Assertions != 1.0 {
+		t.Fatalf("expected averaged assertions 1.0 (failure-only group skipped), got %v", avg.Assertions)
+	}
+}
+
+func TestAveragesNilWhenAllGroupsFail(t *testing.T) {
+	// Every case fails on every run, so all groups are failure-only and Averages
+	// returns nil even though CaseGroups is populated.
+	alwaysFail := func(_ context.Context, _ int) (int, error) {
+		return 0, errors.New("nope")
+	}
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("a")),
+		evals.NewCase[int, int, any](2, evals.WithCaseName[int, int, any]("b")),
+	}
+	ds := mustDataset(t, "allfail", cases)
+
+	report := mustEvaluate(t, ds, alwaysFail, evals.Config{Repeat: 2})
+
+	groups := report.CaseGroups()
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 failure-only groups, got %d", len(groups))
+	}
+	for _, g := range groups {
+		if len(g.Runs) != 0 {
+			t.Fatalf("expected group %q to have no runs, got %d", g.Name, len(g.Runs))
+		}
+	}
+	if report.Averages() != nil {
+		t.Fatalf("expected nil averages when all groups are failure-only, got %+v", report.Averages())
 	}
 }

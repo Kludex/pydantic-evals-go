@@ -1,548 +1,520 @@
-package evals
+package evals_test
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	evals "github.com/pydantic/pydantic-evals-go"
 )
 
-func assertRender(t *testing.T, got, want string) {
+// bxReport is a fixed-duration report used by the render tests so that the
+// rendered box-drawing tables are fully deterministic.
+func bxReport(t *testing.T) *evals.EvaluationReport[string, string, any] {
 	t.Helper()
-	if got != want {
-		t.Errorf("rendered table mismatch\n--- got ---\n%s\n--- want ---\n%s\n", got, want)
+	return &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "case1",
+				Inputs: "in1",
+				Output: "out1",
+				Scores: map[string]evals.EvaluationResult{
+					"sc": {Name: "sc", Value: evals.Float(0.5)},
+				},
+				Labels: map[string]evals.EvaluationResult{
+					"lab": {Name: "lab", Value: evals.Label("good")},
+				},
+				Metrics: map[string]float64{"m": 3},
+				Assertions: map[string]evals.EvaluationResult{
+					"ok": {Name: "ok", Value: evals.Bool(true)},
+				},
+				TaskDuration:  10 * time.Millisecond,
+				TotalDuration: 20 * time.Millisecond,
+			},
+		},
 	}
 }
 
-// scoreCase builds a single-score, single-assertion report case with a fixed task
-// duration so rendered tables are deterministic.
-func scoreCase() ReportCase[string, string, any] {
-	return ReportCase[string, string, any]{
-		Name:         "simple_case",
-		Inputs:       "What is the capital of France?",
-		Output:       "Paris",
-		Scores:       map[string]EvaluationResult{"MyEvaluator": {Name: "MyEvaluator", Value: Float(1.0)}},
-		Assertions:   map[string]EvaluationResult{"IsInstance": {Name: "IsInstance", Value: Bool(true)}},
-		TaskDuration: 1500 * time.Millisecond,
-	}
-}
-
-func TestDefaultRenderOptions(t *testing.T) {
-	o := DefaultRenderOptions()
-	want := RenderOptions{IncludeDurations: true, IncludeAverages: true}
+func TestBxDefaultRenderOptions(t *testing.T) {
+	o := evals.DefaultRenderOptions()
+	want := evals.RenderOptions{IncludeDurations: true, IncludeAverages: true}
 	if o != want {
 		t.Fatalf("DefaultRenderOptions() = %+v, want %+v", o, want)
 	}
 }
 
-func TestRenderDefault(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{scoreCase()}}
-
-	want := `                 Evaluation Summary: task
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID     ┃ Scores            ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ simple_case │ MyEvaluator: 1.00 │ ✔          │     1.5s │
-├─────────────┼───────────────────┼────────────┼──────────┤
-│ Averages    │ MyEvaluator: 1.00 │ 100.0% ✔   │     1.5s │
-└─────────────┴───────────────────┴────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
+func TestBxRenderDefault(t *testing.T) {
+	rep := bxReport(t)
+	const want = "                           Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Scores    ┃ Labels            ┃ Metrics ┃ Assertions ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ case1    │ sc: 0.500 │ lab: good         │ m: 3    │ ✔          │   10.0ms │\n" +
+		"├──────────┼───────────┼───────────────────┼─────────┼────────────┼──────────┤\n" +
+		"│ Averages │ sc: 0.500 │ lab: good: 100.0% │ m: 3.00 │ 100.0% ✔   │   10.0ms │\n" +
+		"└──────────┴───────────┴───────────────────┴─────────┴────────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() default mismatch:\n got %q\nwant %q", got, want)
+	}
 }
 
-func TestRenderIncludeInputOutputExpectedMetadata(t *testing.T) {
-	c := scoreCase()
-	c.HasExpectedOutput = true
-	c.ExpectedOutput = "Paris"
-	c.HasMetadata = true
-	c.Metadata = "fr"
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `                                                     Evaluation Summary: task
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID     ┃ Inputs                         ┃ Metadata ┃ Expected Output ┃ Outputs ┃ Scores            ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ simple_case │ What is the capital of France? │ fr       │ Paris           │ Paris   │ MyEvaluator: 1.00 │ ✔          │     1.5s │
-├─────────────┼────────────────────────────────┼──────────┼─────────────────┼─────────┼───────────────────┼────────────┼──────────┤
-│ Averages    │                                │          │                 │         │ MyEvaluator: 1.00 │ 100.0% ✔   │     1.5s │
-└─────────────┴────────────────────────────────┴──────────┴─────────────────┴─────────┴───────────────────┴────────────┴──────────┘`
-
-	got := r.Render(RenderOptions{
+func TestBxRenderAllColumnsWithReasons(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "myexp",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:              "case1",
+				Inputs:            "in1",
+				Metadata:          map[string]any{"k": "v"},
+				HasMetadata:       true,
+				ExpectedOutput:    "exp1",
+				HasExpectedOutput: true,
+				Output:            "out1",
+				Scores: map[string]evals.EvaluationResult{
+					"sc": {Name: "sc", Value: evals.Float(0.5), Reason: "because"},
+				},
+				Labels: map[string]evals.EvaluationResult{
+					"lab": {Name: "lab", Value: evals.Label("good"), Reason: "labreason"},
+				},
+				Metrics: map[string]float64{"m": 3},
+				Assertions: map[string]evals.EvaluationResult{
+					"ok": {Name: "ok", Value: evals.Bool(true), Reason: "passed"},
+				},
+				TaskDuration:  10 * time.Millisecond,
+				TotalDuration: 20 * time.Millisecond,
+			},
+		},
+	}
+	opts := evals.RenderOptions{
 		IncludeInput:          true,
 		IncludeMetadata:       true,
 		IncludeExpectedOutput: true,
 		IncludeOutput:         true,
 		IncludeDurations:      true,
+		IncludeTotalDuration:  true,
 		IncludeAverages:       true,
-	})
-	assertRender(t, got, want)
-}
-
-func TestRenderMissingMetadataAndExpectedShowDash(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{scoreCase()}}
-
-	want := `                          Evaluation Summary: task
-┏━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-┃ Case ID     ┃ Metadata ┃ Expected Output ┃ Scores            ┃ Assertions ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-│ simple_case │ -        │ -               │ MyEvaluator: 1.00 │ ✔          │
-└─────────────┴──────────┴─────────────────┴───────────────────┴────────────┘`
-
-	got := r.Render(RenderOptions{IncludeMetadata: true, IncludeExpectedOutput: true})
-	assertRender(t, got, want)
-}
-
-func TestRenderIncludeReasonsScoresLabelsAssertions(t *testing.T) {
-	c := ReportCase[string, string, any]{
-		Name:   "case_1",
-		Scores: map[string]EvaluationResult{"score": {Name: "score", Value: Float(0.5), Reason: "partial"}},
-		Labels: map[string]EvaluationResult{"label": {Name: "label", Value: Label("good"), Reason: "looks ok"}},
-		Assertions: map[string]EvaluationResult{
-			"assert": {Name: "assert", Value: Bool(true), Reason: "matched"},
-		},
-		TaskDuration: 12 * time.Millisecond,
+		IncludeReasons:        true,
 	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `                        Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
-┃ Case ID ┃ Scores            ┃ Labels             ┃ Assertions        ┃
-┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
-│ case_1  │ score: 0.500      │ label: good        │ assert: ✔         │
-│         │   Reason: partial │   Reason: looks ok │   Reason: matched │
-│         │                   │                    │                   │
-│         │                   │                    │                   │
-└─────────┴───────────────────┴────────────────────┴───────────────────┘`
-
-	got := r.Render(RenderOptions{IncludeReasons: true})
-	assertRender(t, got, want)
-}
-
-func TestRenderIncludeTotalDuration(t *testing.T) {
-	c := scoreCase()
-	c.TaskDuration = 12 * time.Millisecond
-	c.TotalDuration = 250 * time.Millisecond
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `                    Evaluation Summary: task
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
-┃ Case ID     ┃ Scores            ┃ Assertions ┃      Durations ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
-│ simple_case │ MyEvaluator: 1.00 │ ✔          │   task: 12.0ms │
-│             │                   │            │ total: 250.0ms │
-├─────────────┼───────────────────┼────────────┼────────────────┤
-│ Averages    │ MyEvaluator: 1.00 │ 100.0% ✔   │   task: 12.0ms │
-│             │                   │            │ total: 250.0ms │
-└─────────────┴───────────────────┴────────────┴────────────────┘`
-
-	got := r.Render(RenderOptions{IncludeDurations: true, IncludeTotalDuration: true, IncludeAverages: true})
-	assertRender(t, got, want)
-}
-
-func TestRenderMetricsColumn(t *testing.T) {
-	c := ReportCase[string, string, any]{
-		Name:         "case_1",
-		Metrics:      map[string]float64{"tokens": 42, "cost": 0.5},
-		TaskDuration: 1500 * time.Millisecond,
+	const want = "                                                             Evaluation Summary: myexp\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Inputs ┃ Metadata ┃ Expected Output ┃ Outputs ┃ Scores            ┃ Labels              ┃ Metrics ┃ Assertions       ┃     Durations ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩\n" +
+		"│ case1    │ in1    │ {k: v}   │ exp1            │ out1    │ sc: 0.500         │ lab: good           │ m: 3    │ ok: ✔            │  task: 10.0ms │\n" +
+		"│          │        │          │                 │         │   Reason: because │   Reason: labreason │         │   Reason: passed │ total: 20.0ms │\n" +
+		"│          │        │          │                 │         │                   │                     │         │                  │               │\n" +
+		"│          │        │          │                 │         │                   │                     │         │                  │               │\n" +
+		"├──────────┼────────┼──────────┼─────────────────┼─────────┼───────────────────┼─────────────────────┼─────────┼──────────────────┼───────────────┤\n" +
+		"│ Averages │        │          │                 │         │ sc: 0.500         │ lab: good: 100.0%   │ m: 3.00 │ 100.0% ✔         │  task: 10.0ms │\n" +
+		"│          │        │          │                 │         │                   │                     │         │                  │ total: 20.0ms │\n" +
+		"└──────────┴────────┴──────────┴─────────────────┴─────────┴───────────────────┴─────────────────────┴─────────┴──────────────────┴───────────────┘"
+	if got := rep.Render(opts); got != want {
+		t.Fatalf("Render() all-columns mismatch:\n got %q\nwant %q", got, want)
 	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `       Evaluation Summary: task
-┏━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID  ┃ Metrics      ┃ Duration ┃
-┡━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ case_1   │ cost: 0.500  │     1.5s │
-│          │ tokens: 42   │          │
-├──────────┼──────────────┼──────────┤
-│ Averages │ cost: 0.500  │     1.5s │
-│          │ tokens: 42.0 │          │
-└──────────┴──────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
 }
 
-func TestRenderLabelDistributionInAverages(t *testing.T) {
-	c1 := ReportCase[string, string, any]{
-		Name:         "c1",
-		Labels:       map[string]EvaluationResult{"quality": {Name: "quality", Value: Label("good")}},
-		TaskDuration: 1500 * time.Millisecond,
-	}
-	c2 := ReportCase[string, string, any]{
-		Name:         "c2",
-		Labels:       map[string]EvaluationResult{"quality": {Name: "quality", Value: Label("bad")}},
-		TaskDuration: 1500 * time.Millisecond,
-	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c1, c2}}
-
-	want := `                 Evaluation Summary: task
-┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID  ┃ Labels                           ┃ Duration ┃
-┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ c1       │ quality: good                    │     1.5s │
-├──────────┼──────────────────────────────────┼──────────┤
-│ c2       │ quality: bad                     │     1.5s │
-├──────────┼──────────────────────────────────┼──────────┤
-│ Averages │ quality: bad: 50.0%, good: 50.0% │     1.5s │
-└──────────┴──────────────────────────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
-}
-
-func TestRenderEvaluatorFailuresColumn(t *testing.T) {
-	c := ReportCase[string, string, any]{
-		Name:         "case_1",
-		Scores:       map[string]EvaluationResult{"ok": {Name: "ok", Value: Float(1.0)}},
-		TaskDuration: 1500 * time.Millisecond,
-		EvaluatorFailures: []EvaluatorFailure{
-			{Name: "Boom", ErrorMessage: "kaboom"},
-			{Name: "Silent"},
+func TestBxRenderReasonsDefaultColumns(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "c",
+				Output: "o",
+				Scores: map[string]evals.EvaluationResult{
+					"sc": {Name: "sc", Value: evals.Float(0.5), Reason: "scorereason"},
+				},
+				Labels: map[string]evals.EvaluationResult{
+					"lab": {Name: "lab", Value: evals.Label("good"), Reason: "labelreason"},
+				},
+				TaskDuration: time.Millisecond,
+			},
 		},
 	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `               Evaluation Summary: task
-┏━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID  ┃ Scores   ┃ Evaluator Failures ┃ Duration ┃
-┡━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ case_1   │ ok: 1.00 │ Boom: kaboom       │     1.5s │
-│          │          │ Silent             │          │
-├──────────┼──────────┼────────────────────┼──────────┤
-│ Averages │ ok: 1.00 │                    │     1.5s │
-└──────────┴──────────┴────────────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
-}
-
-// TestRenderEvaluatorFailuresViaEvaluate drives an evaluator that errors through
-// the public Evaluate path, rendering with the duration column disabled so the
-// non-deterministic timings do not appear in the asserted string.
-func TestRenderEvaluatorFailuresViaEvaluate(t *testing.T) {
-	ds, err := NewDataset[string, string, any](
-		"task",
-		[]Case[string, string, any]{NewCase[string, string, any]("in", WithCaseName[string, string, any]("only"))},
-		boomEvaluator{},
-	)
-	if err != nil {
-		t.Fatal(err)
+	const want = "                       Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Scores                ┃ Labels                ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ c        │ sc: 0.500             │ lab: good             │    1.0ms │\n" +
+		"│          │   Reason: scorereason │   Reason: labelreason │          │\n" +
+		"│          │                       │                       │          │\n" +
+		"├──────────┼───────────────────────┼───────────────────────┼──────────┤\n" +
+		"│ Averages │ sc: 0.500             │ lab: good: 100.0%     │    1.0ms │\n" +
+		"└──────────┴───────────────────────┴───────────────────────┴──────────┘"
+	if got := rep.Render(evals.RenderOptions{IncludeReasons: true, IncludeDurations: true, IncludeAverages: true}); got != want {
+		t.Fatalf("Render() score/label reasons mismatch:\n got %q\nwant %q", got, want)
 	}
-	report, err := ds.Evaluate(context.Background(), func(_ context.Context, in string) (string, error) {
-		return in, nil
-	})
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestBxRenderEvaluatorFailures(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "case1",
+				Output: "out1",
+				Assertions: map[string]evals.EvaluationResult{
+					"ok": {Name: "ok", Value: evals.Bool(false)},
+				},
+				EvaluatorFailures: []evals.EvaluatorFailure{
+					{Name: "Boom", ErrorMessage: "kaboom"},
+				},
+				TaskDuration: 5 * time.Millisecond,
+			},
+		},
 	}
-
-	want := `    Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
-┃ Case ID ┃ Evaluator Failures ┃
-┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
-│ only    │ Boom: it failed    │
-└─────────┴────────────────────┘`
-
-	assertRender(t, report.Render(RenderOptions{}), want)
-}
-
-type boomEvaluator struct{}
-
-func (boomEvaluator) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, any]) (EvaluatorOutput, error) {
-	return nil, errors.New("it failed")
-}
-func (boomEvaluator) Spec() EvaluatorSpec { return NewSpec("Boom") }
-
-func TestRenderTitleOverride(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{scoreCase()}}
-
-	want := `                       Custom Title
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID     ┃ Scores            ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ simple_case │ MyEvaluator: 1.00 │ ✔          │     1.5s │
-└─────────────┴───────────────────┴────────────┴──────────┘`
-
-	got := r.Render(RenderOptions{IncludeDurations: true, Title: "Custom Title"})
-	assertRender(t, got, want)
-}
-
-func TestRenderOmitTitle(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{scoreCase()}}
-
-	want := `┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID     ┃ Scores            ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ simple_case │ MyEvaluator: 1.00 │ ✔          │     1.5s │
-└─────────────┴───────────────────┴────────────┴──────────┘`
-
-	got := r.Render(RenderOptions{IncludeDurations: true, OmitTitle: true, Title: "ignored"})
-	assertRender(t, got, want)
-}
-
-func TestRenderIncludeAveragesFalse(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{scoreCase()}}
-
-	want := `                 Evaluation Summary: task
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID     ┃ Scores            ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ simple_case │ MyEvaluator: 1.00 │ ✔          │     1.5s │
-└─────────────┴───────────────────┴────────────┴──────────┘`
-
-	got := r.Render(RenderOptions{IncludeDurations: true, IncludeAverages: false})
-	assertRender(t, got, want)
-}
-
-func TestRenderEmptyReport(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task"}
-
-	want := `Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID ┃ Duration ┃
-┡━━━━━━━━━╇━━━━━━━━━━┩
-└─────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
-}
-
-func TestRenderEmptyReportWithColumns(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task"}
-
-	want := `Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━┓
-┃ Case ID ┃ Inputs ┃
-┡━━━━━━━━━╇━━━━━━━━┩
-└─────────┴────────┘`
-
-	got := r.Render(RenderOptions{IncludeInput: true})
-	assertRender(t, got, want)
-}
-
-func TestRenderMapInputsAndOutputDeterministicKeyOrdering(t *testing.T) {
-	c := ReportCase[map[string]any, map[string]any, any]{
-		Name:         "m",
-		Inputs:       map[string]any{"b": 2, "a": 1},
-		Output:       map[string]any{"z": "last", "a": "first"},
-		TaskDuration: 1500 * time.Millisecond,
+	const want = "                Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Assertions ┃ Evaluator Failures ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ case1    │ ✗          │ Boom: kaboom       │    5.0ms │\n" +
+		"├──────────┼────────────┼────────────────────┼──────────┤\n" +
+		"│ Averages │ 0.0% ✔     │                    │    5.0ms │\n" +
+		"└──────────┴────────────┴────────────────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() evaluator-failures mismatch:\n got %q\nwant %q", got, want)
 	}
-	r := &EvaluationReport[map[string]any, map[string]any, any]{
-		Name:  "task",
-		Cases: []ReportCase[map[string]any, map[string]any, any]{c},
+}
+
+func TestBxRenderEmpty(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{Name: "empty"}
+	const want = "Evaluation Summary: empty\n" +
+		"┏━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID ┃ Duration ┃\n" +
+		"┡━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"└─────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() empty mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderTitleOverrideAndOmit(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "case1", Output: "out1", TaskDuration: 5 * time.Millisecond},
+		},
 	}
 
-	want := `                 Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID ┃ Inputs       ┃ Outputs             ┃ Duration ┃
-┡━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ m       │ {a: 1, b: 2} │ {a: first, z: last} │     1.5s │
-└─────────┴──────────────┴─────────────────────┴──────────┘`
+	const wantOmit = "┏━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID ┃ Duration ┃\n" +
+		"┡━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ case1   │    5.0ms │\n" +
+		"└─────────┴──────────┘"
+	if got := rep.Render(evals.RenderOptions{OmitTitle: true, IncludeDurations: true}); got != wantOmit {
+		t.Fatalf("Render() OmitTitle mismatch:\n got %q\nwant %q", got, wantOmit)
+	}
 
-	got := r.Render(RenderOptions{IncludeInput: true, IncludeOutput: true, IncludeDurations: true})
-	assertRender(t, got, want)
+	const wantTitle = "        Custom\n" +
+		"┏━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID ┃ Duration ┃\n" +
+		"┡━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ case1   │    5.0ms │\n" +
+		"└─────────┴──────────┘"
+	if got := rep.Render(evals.RenderOptions{Title: "Custom", IncludeDurations: true}); got != wantTitle {
+		t.Fatalf("Render() Title override mismatch:\n got %q\nwant %q", got, wantTitle)
+	}
 }
 
-// TestRenderDocsExample reproduces the README example end-to-end through the
-// public Evaluate API and verifies the score, averages and assertion cells. The
-// report name defaults to the task name ("task"), and durations are omitted so
-// the asserted table is deterministic.
-func TestRenderDocsExample(t *testing.T) {
-	c := NewCase[string, string, any](
-		"What is the capital of France?",
-		WithCaseName[string, string, any]("simple_case"),
-		WithExpectedOutput[string, string, any]("Paris"),
-	)
-	ds, err := NewDataset[string, string, any](
-		"capital_eval",
-		[]Case[string, string, any]{c},
-		IsInstance[string, string, any]{TypeName: "string"},
-		myEvaluator{},
-	)
-	if err != nil {
-		t.Fatal(err)
+func TestBxRenderNoAverages(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "case1", Output: "out1", TaskDuration: 5 * time.Millisecond},
+		},
 	}
-	report, err := ds.Evaluate(context.Background(), func(_ context.Context, _ string) (string, error) {
+	const want = "Evaluation Summary: task\n" +
+		"┏━━━━━━━━━┓\n" +
+		"┃ Case ID ┃\n" +
+		"┡━━━━━━━━━┩\n" +
+		"│ case1   │\n" +
+		"└─────────┘"
+	if got := rep.Render(evals.RenderOptions{IncludeAverages: false}); got != want {
+		t.Fatalf("Render() IncludeAverages=false mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderTotalDurationLines(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "case1", Output: "out1", TaskDuration: 10 * time.Millisecond, TotalDuration: 20 * time.Millisecond},
+		},
+	}
+	const want = "  Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃     Durations ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━━━━┩\n" +
+		"│ case1    │  task: 10.0ms │\n" +
+		"│          │ total: 20.0ms │\n" +
+		"├──────────┼───────────────┤\n" +
+		"│ Averages │  task: 10.0ms │\n" +
+		"│          │ total: 20.0ms │\n" +
+		"└──────────┴───────────────┘"
+	got := rep.Render(evals.RenderOptions{IncludeDurations: true, IncludeTotalDuration: true, IncludeAverages: true})
+	if got != want {
+		t.Fatalf("Render() total-duration mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderScoreIntColumn(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "c",
+				Output: "o",
+				Scores: map[string]evals.EvaluationResult{
+					"i": {Name: "i", Value: evals.Int(5)},
+				},
+				TaskDuration: time.Millisecond,
+			},
+		},
+	}
+	const want = "    Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Scores  ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ c        │ i: 5    │    1.0ms │\n" +
+		"├──────────┼─────────┼──────────┤\n" +
+		"│ Averages │ i: 5.00 │    1.0ms │\n" +
+		"└──────────┴─────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() int score mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderMetricsThousands(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "c", Output: "o", Metrics: map[string]float64{"tokens": 1500}, TaskDuration: time.Millisecond},
+		},
+	}
+	const want = "        Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Metrics         ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ c        │ tokens: 1,500   │    1.0ms │\n" +
+		"├──────────┼─────────────────┼──────────┤\n" +
+		"│ Averages │ tokens: 1,500.0 │    1.0ms │\n" +
+		"└──────────┴─────────────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() metrics mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderLabelDistribution(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "c1", Output: "o", Labels: map[string]evals.EvaluationResult{"cat": {Name: "cat", Value: evals.Label("a")}}, TaskDuration: time.Millisecond},
+			{Name: "c2", Output: "o", Labels: map[string]evals.EvaluationResult{"cat": {Name: "cat", Value: evals.Label("b")}}, TaskDuration: time.Millisecond},
+		},
+	}
+	const want = "            Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Labels                  ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ c1       │ cat: a                  │    1.0ms │\n" +
+		"├──────────┼─────────────────────────┼──────────┤\n" +
+		"│ c2       │ cat: b                  │    1.0ms │\n" +
+		"├──────────┼─────────────────────────┼──────────┤\n" +
+		"│ Averages │ cat: a: 50.0%, b: 50.0% │    1.0ms │\n" +
+		"└──────────┴─────────────────────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() label distribution mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderMapInputsOutputs(t *testing.T) {
+	rep := &evals.EvaluationReport[map[string]any, map[string]any, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[map[string]any, map[string]any, any]{
+			{
+				Name:   "c",
+				Inputs: map[string]any{"b": 2, "a": 1},
+				Output: map[string]any{"z": 9, "y": 8},
+				Assertions: map[string]evals.EvaluationResult{
+					"ok": {Name: "ok", Value: evals.Bool(true)},
+				},
+				TaskDuration: time.Millisecond,
+			},
+		},
+	}
+	const want = "               Evaluation Summary: task\n" +
+		"┏━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓\n" +
+		"┃ Case ID ┃ Inputs       ┃ Outputs      ┃ Assertions ┃\n" +
+		"┡━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩\n" +
+		"│ c       │ {a: 1, b: 2} │ {y: 8, z: 9} │ ✔          │\n" +
+		"└─────────┴──────────────┴──────────────┴────────────┘"
+	got := rep.Render(evals.RenderOptions{IncludeInput: true, IncludeOutput: true})
+	if got != want {
+		t.Fatalf("Render() map inputs/outputs mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderMissingCellsAndScalarInputs(t *testing.T) {
+	rep := &evals.EvaluationReport[evals.Scalar, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[evals.Scalar, string, any]{
+			{
+				Name:   "c1",
+				Inputs: evals.Label("scalarinput"),
+				Output: "o1",
+				Scores: map[string]evals.EvaluationResult{
+					"sc": {Name: "sc", Value: evals.Float(0)},
+				},
+				Metrics: map[string]float64{"neg": -1500},
+				Assertions: map[string]evals.EvaluationResult{
+					"a": {Name: "a", Value: evals.Bool(true)},
+				},
+				EvaluatorFailures: []evals.EvaluatorFailure{{Name: "NoMsg"}},
+				TaskDuration:      0,
+			},
+			{
+				Name:         "c2",
+				Output:       "o2",
+				TaskDuration: 250 * time.Microsecond,
+			},
+		},
+	}
+	opts := evals.RenderOptions{
+		IncludeInput:    true,
+		IncludeMetadata: true,
+		IncludeReasons:  true,
+		IncludeAverages: true,
+	}
+	const want = "                                     Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Inputs      ┃ Metadata ┃ Scores    ┃ Metrics       ┃ Assertions ┃ Evaluator Failures ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩\n" +
+		"│ c1       │ scalarinput │ -        │ sc: 0.000 │ neg: -1,500   │ a: ✔       │ NoMsg              │\n" +
+		"│          │             │          │           │               │            │                    │\n" +
+		"├──────────┼─────────────┼──────────┼───────────┼───────────────┼────────────┼────────────────────┤\n" +
+		"│ c2       │ -           │ -        │ -         │ -             │ -          │ -                  │\n" +
+		"├──────────┼─────────────┼──────────┼───────────┼───────────────┼────────────┼────────────────────┤\n" +
+		"│ Averages │             │          │ sc: 0.000 │ neg: -1,500.0 │ 100.0% ✔   │                    │\n" +
+		"└──────────┴─────────────┴──────────┴───────────┴───────────────┴────────────┴────────────────────┘"
+	if got := rep.Render(opts); got != want {
+		t.Fatalf("Render() missing-cells mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderDurationUnits(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "zero", Output: "o", TaskDuration: 0},
+			{Name: "us", Output: "o", TaskDuration: 1500 * time.Nanosecond},
+			{Name: "subus", Output: "o", TaskDuration: 500 * time.Nanosecond},
+			{Name: "sec", Output: "o", TaskDuration: 2 * time.Second},
+		},
+	}
+	const want = "Evaluation Summary: task\n" +
+		"┏━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID ┃ Duration ┃\n" +
+		"┡━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ zero    │       0s │\n" +
+		"├─────────┼──────────┤\n" +
+		"│ us      │      2µs │\n" +
+		"├─────────┼──────────┤\n" +
+		"│ subus   │    0.5µs │\n" +
+		"├─────────┼──────────┤\n" +
+		"│ sec     │     2.0s │\n" +
+		"└─────────┴──────────┘"
+	if got := rep.Render(evals.RenderOptions{IncludeDurations: true}); got != want {
+		t.Fatalf("Render() duration units mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxRenderLargeFloatScore(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "c", Output: "o", Scores: map[string]evals.EvaluationResult{"big": {Name: "big", Value: evals.Float(123)}}, TaskDuration: time.Millisecond},
+		},
+	}
+	const want = "      Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Scores     ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ c        │ big: 123.0 │    1.0ms │\n" +
+		"├──────────┼────────────┼──────────┤\n" +
+		"│ Averages │ big: 123.0 │    1.0ms │\n" +
+		"└──────────┴────────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() large float score mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxFprintWritesRenderPlusNewline(t *testing.T) {
+	rep := bxReport(t)
+	var buf bytes.Buffer
+	rep.Fprint(&buf)
+	want := rep.Render() + "\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("Fprint default mismatch:\n got %q\nwant %q", got, want)
+	}
+
+	buf.Reset()
+	opts := evals.RenderOptions{IncludeInput: true, IncludeOutput: true}
+	rep.Fprint(&buf, opts)
+	want = rep.Render(opts) + "\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("Fprint with opts mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestBxPrintDoesNotPanic(t *testing.T) {
+	rep := bxReport(t)
+	rep.Print()
+	rep.Print(evals.RenderOptions{IncludeInput: true})
+}
+
+func TestBxRenderDocsExample(t *testing.T) {
+	s := evals.For[string, string, any]()
+	c := s.Case("What is the capital of France?").Name("simple_case").Expect("Paris")
+	ds := s.Dataset("docs", c).With(bxScoreEvaluator{}, s.IsInstance("string"))
+	rep, err := ds.Evaluate(context.Background(), func(_ context.Context, _ string) (string, error) {
 		return "Paris", nil
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Evaluate: %v", err)
 	}
 
-	want := `                                 Evaluation Summary: task
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-┃ Case ID     ┃ Inputs                         ┃ Outputs ┃ Scores            ┃ Assertions ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-│ simple_case │ What is the capital of France? │ Paris   │ MyEvaluator: 1.00 │ ✔          │
-├─────────────┼────────────────────────────────┼─────────┼───────────────────┼────────────┤
-│ Averages    │                                │         │ MyEvaluator: 1.00 │ 100.0% ✔   │
-└─────────────┴────────────────────────────────┴─────────┴───────────────────┴────────────┘`
+	out := rep.Render(evals.RenderOptions{IncludeAverages: true})
+	const want = "            Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓\n" +
+		"┃ Case ID     ┃ Scores            ┃ Assertions ┃\n" +
+		"┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩\n" +
+		"│ simple_case │ MyEvaluator: 1.00 │ ✔          │\n" +
+		"├─────────────┼───────────────────┼────────────┤\n" +
+		"│ Averages    │ MyEvaluator: 1.00 │ 100.0% ✔   │\n" +
+		"└─────────────┴───────────────────┴────────────┘"
+	if out != want {
+		t.Fatalf("docs example render mismatch:\n got %q\nwant %q", out, want)
+	}
 
-	got := report.Render(RenderOptions{IncludeInput: true, IncludeOutput: true, IncludeAverages: true})
-	assertRender(t, got, want)
-}
-
-type myEvaluator struct{}
-
-func (myEvaluator) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, any]) (EvaluatorOutput, error) {
-	return ScalarValue(Float(1.0)), nil
-}
-func (myEvaluator) Spec() EvaluatorSpec           { return NewSpec("MyEvaluator") }
-func (myEvaluator) DefaultEvaluationName() string { return "MyEvaluator" }
-
-// TestPrintDoesNotPanic exercises Print. The package writes to an unexported
-// stdout that a test cannot reassign, so the written bytes are not capturable via
-// the public API; we only assert that Print does not panic.
-func TestPrintDoesNotPanic(t *testing.T) {
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{scoreCase()}}
-	defer func() {
-		if rec := recover(); rec != nil {
-			t.Fatalf("Print panicked: %v", rec)
+	for _, sub := range []string{"MyEvaluator: 1.00", "✔", "100.0% ✔"} {
+		if !strings.Contains(out, sub) {
+			t.Fatalf("docs example render missing %q in:\n%s", sub, out)
 		}
-	}()
-	r.Print()
-	r.Print(RenderOptions{IncludeInput: true})
-}
-
-func TestRenderAssertionFailMark(t *testing.T) {
-	c := ReportCase[string, string, any]{
-		Name:         "case_1",
-		Assertions:   map[string]EvaluationResult{"check": {Name: "check", Value: Bool(false)}},
-		TaskDuration: 1500 * time.Millisecond,
 	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `      Evaluation Summary: task
-┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID  ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ case_1   │ ✗          │     1.5s │
-├──────────┼────────────┼──────────┤
-│ Averages │ 0.0% ✔     │     1.5s │
-└──────────┴────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
-}
-
-// TestRenderReasonsNoReasonText covers the IncludeReasons branch where a result
-// has no Reason, so only the marker is shown (no trailing reason line).
-func TestRenderReasonsNoReasonText(t *testing.T) {
-	c := ReportCase[string, string, any]{
-		Name:         "case_1",
-		Scores:       map[string]EvaluationResult{"s": {Name: "s", Value: Int(3)}},
-		Assertions:   map[string]EvaluationResult{"a": {Name: "a", Value: Bool(true)}},
-		TaskDuration: 1500 * time.Millisecond,
+	avg := rep.Averages()
+	if avg == nil {
+		t.Fatal("Averages() = nil, want non-nil")
 	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	want := `          Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID ┃ Scores ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ case_1  │ s: 3   │ a: ✔       │     1.5s │
-│         │        │            │          │
-└─────────┴────────┴────────────┴──────────┘`
-
-	got := r.Render(RenderOptions{IncludeDurations: true, IncludeReasons: true})
-	assertRender(t, got, want)
-}
-
-func TestRenderIntScoreUsesThousandsSeparator(t *testing.T) {
-	c := ReportCase[string, string, any]{
-		Name:         "case_1",
-		Scores:       map[string]EvaluationResult{"count": {Name: "count", Value: Int(1234)}},
-		TaskDuration: 1500 * time.Millisecond,
-	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c}}
-
-	got := r.Render()
-	if !strings.Contains(got, "count: 1,234") {
-		t.Errorf("expected int score with thousands separator, got:\n%s", got)
+	if got := avg.Scores["MyEvaluator"]; got != 1.0 {
+		t.Fatalf("Averages score = %v, want 1.0", got)
 	}
 }
 
-// TestRenderNilOutputShowsDash covers the nil arm of cell formatting: a nil
-// output (when the output type is an interface) renders as a dash.
-func TestRenderNilOutputShowsDash(t *testing.T) {
-	c := ReportCase[any, any, any]{Name: "c1", Output: nil, TaskDuration: time.Second}
-	r := &EvaluationReport[any, any, any]{Name: "task", Cases: []ReportCase[any, any, any]{c}}
+type bxScoreEvaluator struct{}
 
-	want := `Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━━┓
-┃ Case ID ┃ Outputs ┃
-┡━━━━━━━━━╇━━━━━━━━━┩
-│ c1      │ -       │
-└─────────┴─────────┘`
-
-	got := r.Render(RenderOptions{IncludeOutput: true})
-	assertRender(t, got, want)
+func (bxScoreEvaluator) Evaluate(_ context.Context, _ *evals.EvaluatorContext[string, string, any]) (evals.Output, error) {
+	return evals.Score(1.0), nil
 }
 
-// TestRenderScalarOutput covers the Scalar arm of cell formatting: a Scalar
-// output renders via its String method.
-func TestRenderScalarOutput(t *testing.T) {
-	c := ReportCase[any, Scalar, any]{Name: "c1", Output: Label("hi"), TaskDuration: time.Second}
-	r := &EvaluationReport[any, Scalar, any]{Name: "task", Cases: []ReportCase[any, Scalar, any]{c}}
-
-	want := `Evaluation Summary: task
-┏━━━━━━━━━┳━━━━━━━━━┓
-┃ Case ID ┃ Outputs ┃
-┡━━━━━━━━━╇━━━━━━━━━┩
-│ c1      │ hi      │
-└─────────┴─────────┘`
-
-	got := r.Render(RenderOptions{IncludeOutput: true})
-	assertRender(t, got, want)
-}
-
-// TestRenderEvaluatorFailuresDashForCaseWithout covers the dash rendered for a
-// case with no evaluator failures when another case populates the column.
-func TestRenderEvaluatorFailuresDashForCaseWithout(t *testing.T) {
-	c1 := ReportCase[string, string, any]{
-		Name:              "c1",
-		EvaluatorFailures: []EvaluatorFailure{{Name: "Boom", ErrorMessage: "x"}},
-		TaskDuration:      time.Second,
-	}
-	c2 := ReportCase[string, string, any]{Name: "c2", TaskDuration: time.Second}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c1, c2}}
-
-	want := `          Evaluation Summary: task
-┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID  ┃ Evaluator Failures ┃ Duration ┃
-┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ c1       │ Boom: x            │     1.0s │
-├──────────┼────────────────────┼──────────┤
-│ c2       │ -                  │     1.0s │
-├──────────┼────────────────────┼──────────┤
-│ Averages │                    │     1.0s │
-└──────────┴────────────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
-}
-
-// TestRenderMixedAssertionsAcrossCases covers the per-case path where the
-// assertions column is present but a given case has no assertions (rendered as a
-// dash) while the aggregate still reports a pass rate.
-func TestRenderMixedAssertionsAcrossCases(t *testing.T) {
-	c1 := ReportCase[string, string, any]{
-		Name:         "c1",
-		Scores:       map[string]EvaluationResult{"s": {Name: "s", Value: Float(0.5)}},
-		Assertions:   map[string]EvaluationResult{"a": {Name: "a", Value: Bool(true)}},
-		TaskDuration: time.Second,
-	}
-	c2 := ReportCase[string, string, any]{
-		Name:         "c2",
-		Scores:       map[string]EvaluationResult{"s": {Name: "s", Value: Float(0.5)}},
-		TaskDuration: time.Second,
-	}
-	r := &EvaluationReport[string, string, any]{Name: "task", Cases: []ReportCase[string, string, any]{c1, c2}}
-
-	want := `           Evaluation Summary: task
-┏━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Case ID  ┃ Scores   ┃ Assertions ┃ Duration ┃
-┡━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ c1       │ s: 0.500 │ ✔          │     1.0s │
-├──────────┼──────────┼────────────┼──────────┤
-│ c2       │ s: 0.500 │ -          │     1.0s │
-├──────────┼──────────┼────────────┼──────────┤
-│ Averages │ s: 0.500 │ 100.0% ✔   │     1.0s │
-└──────────┴──────────┴────────────┴──────────┘`
-
-	assertRender(t, r.Render(), want)
-}
+func (bxScoreEvaluator) EvaluationName() string { return "MyEvaluator" }

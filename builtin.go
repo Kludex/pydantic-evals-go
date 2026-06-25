@@ -11,40 +11,41 @@ import (
 // Equals checks whether the output exactly equals the provided value.
 type Equals[I, O, M any] struct {
 	// Value to compare the output against.
-	Value any
-	// EvaluationName overrides the result name in reports.
-	EvaluationName string
+	Value O
+	// Name overrides the result name in reports (default "Equals").
+	Name string
 }
 
-func (e Equals[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (EvaluatorOutput, error) {
-	return ScalarValue(Bool(deepEqual(ec.Output, e.Value))), nil
+func (e Equals[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (Output, error) {
+	return Assertion(deepEqual(ec.Output, e.Value)), nil
 }
 
 func (e Equals[I, O, M]) Spec() EvaluatorSpec {
-	return specWithName("Equals", e.EvaluationName, map[string]any{"value": e.Value})
+	return specWithName("Equals", e.Name, map[string]any{"value": e.Value})
 }
 
-func (e Equals[I, O, M]) DefaultEvaluationName() string { return nameOr(e.EvaluationName, "Equals") }
+func (e Equals[I, O, M]) EvaluationName() string { return nameOr(e.Name, "Equals") }
 
 // EqualsExpected checks whether the output exactly equals the case's expected
 // output. If the case has no expected output, it yields no result.
 type EqualsExpected[I, O, M any] struct {
-	EvaluationName string
+	// Name overrides the result name in reports (default "EqualsExpected").
+	Name string
 }
 
-func (e EqualsExpected[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (EvaluatorOutput, error) {
+func (e EqualsExpected[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (Output, error) {
 	if !ec.HasExpectedOutput {
-		return ScalarMapOutput{}, nil
+		return NoResult(), nil
 	}
-	return ScalarValue(Bool(deepEqual(ec.Output, ec.ExpectedOutput))), nil
+	return Assertion(deepEqual(ec.Output, ec.ExpectedOutput)), nil
 }
 
 func (e EqualsExpected[I, O, M]) Spec() EvaluatorSpec {
-	return specWithName("EqualsExpected", e.EvaluationName, nil)
+	return specWithName("EqualsExpected", e.Name, nil)
 }
 
-func (e EqualsExpected[I, O, M]) DefaultEvaluationName() string {
-	return nameOr(e.EvaluationName, "EqualsExpected")
+func (e EqualsExpected[I, O, M]) EvaluationName() string {
+	return nameOr(e.Name, "EqualsExpected")
 }
 
 // Contains checks whether the output contains the provided value.
@@ -53,15 +54,19 @@ func (e EqualsExpected[I, O, M]) DefaultEvaluationName() string {
 // membership; for maps, that every key/value in Value (when Value is a map) is
 // present, or that Value is a key. CaseSensitive applies only to string checks.
 type Contains[I, O, M any] struct {
-	Value          any
-	CaseSensitive  bool
-	AsStrings      bool
-	EvaluationName string
+	// Value to look for within the output.
+	Value any
+	// CaseSensitive controls string comparison (default false: case-insensitive).
+	CaseSensitive bool
+	// AsStrings forces both sides to be compared as strings.
+	AsStrings bool
+	// Name overrides the result name in reports (default "Contains").
+	Name string
 }
 
-func (c Contains[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (EvaluatorOutput, error) {
+func (c Contains[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (Output, error) {
 	failureReason := containsCheck(ec.Output, c.Value, c.AsStrings, c.CaseSensitive)
-	return Reason(Bool(failureReason == ""), failureReason), nil
+	return Assertion(failureReason == "").WithReason(failureReason), nil
 }
 
 func (c Contains[I, O, M]) Spec() EvaluatorSpec {
@@ -72,14 +77,14 @@ func (c Contains[I, O, M]) Spec() EvaluatorSpec {
 	if c.AsStrings {
 		kwargs["as_strings"] = c.AsStrings
 	}
-	if c.EvaluationName != "" {
-		kwargs["evaluation_name"] = c.EvaluationName
+	if c.Name != "" {
+		kwargs["evaluation_name"] = c.Name
 	}
 	return EvaluatorSpec{Name: "Contains", Kwargs: kwargs}
 }
 
-func (c Contains[I, O, M]) DefaultEvaluationName() string {
-	return nameOr(c.EvaluationName, "Contains")
+func (c Contains[I, O, M]) EvaluationName() string {
+	return nameOr(c.Name, "Contains")
 }
 
 // IsInstance checks whether the output's runtime type name matches TypeName.
@@ -87,38 +92,41 @@ func (c Contains[I, O, M]) DefaultEvaluationName() string {
 // The match is against the unqualified type name (e.g. "string", "int", or a
 // struct's name), making it useful when O is an interface type like `any`.
 type IsInstance[I, O, M any] struct {
-	TypeName       string
-	EvaluationName string
+	// TypeName is the unqualified Go type name the output must have.
+	TypeName string
+	// Name overrides the result name in reports (default "IsInstance").
+	Name string
 }
 
-func (e IsInstance[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (EvaluatorOutput, error) {
+func (e IsInstance[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (Output, error) {
 	actual := typeName(ec.Output)
 	if actual == e.TypeName {
-		return ScalarValue(Bool(true)), nil
+		return Assertion(true), nil
 	}
-	return Reason(Bool(false), fmt.Sprintf("output is of type %s", actual)), nil
+	return Assertion(false).WithReason(fmt.Sprintf("output is of type %s", actual)), nil
 }
 
 func (e IsInstance[I, O, M]) Spec() EvaluatorSpec {
-	if e.EvaluationName != "" {
+	if e.Name != "" {
 		return EvaluatorSpec{Name: "IsInstance", Kwargs: map[string]any{
-			"type_name": e.TypeName, "evaluation_name": e.EvaluationName,
+			"type_name": e.TypeName, "evaluation_name": e.Name,
 		}}
 	}
 	return NewSpecArg("IsInstance", e.TypeName)
 }
 
-func (e IsInstance[I, O, M]) DefaultEvaluationName() string {
-	return nameOr(e.EvaluationName, "IsInstance")
+func (e IsInstance[I, O, M]) EvaluationName() string {
+	return nameOr(e.Name, "IsInstance")
 }
 
 // MaxDuration checks whether the task ran in at most Max.
 type MaxDuration[I, O, M any] struct {
+	// Max is the inclusive upper bound on the task duration.
 	Max time.Duration
 }
 
-func (e MaxDuration[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (EvaluatorOutput, error) {
-	return ScalarValue(Bool(ec.Duration <= e.Max)), nil
+func (e MaxDuration[I, O, M]) Evaluate(_ context.Context, ec *EvaluatorContext[I, O, M]) (Output, error) {
+	return Assertion(ec.Duration <= e.Max), nil
 }
 
 func (e MaxDuration[I, O, M]) Spec() EvaluatorSpec {

@@ -134,8 +134,13 @@ func (r *EvaluationReport[I, O, M]) Render(opts ...RenderOptions) string {
 
 // Print writes the rendered report to standard output.
 func (r *EvaluationReport[I, O, M]) Print(opts ...RenderOptions) {
-	io.WriteString(stdout, r.Render(opts...))
-	io.WriteString(stdout, "\n")
+	r.Fprint(stdout, opts...)
+}
+
+// Fprint writes the rendered report to w.
+func (r *EvaluationReport[I, O, M]) Fprint(w io.Writer, opts ...RenderOptions) {
+	io.WriteString(w, r.Render(opts...))
+	io.WriteString(w, "\n")
 }
 
 type reportColumns[I, O, M any] struct {

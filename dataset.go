@@ -93,54 +93,23 @@ func (d *Dataset[I, O, M]) AddEvaluatorForCase(caseName string, e Evaluator[I, O
 	return fmt.Errorf("case %q not found in the dataset", caseName)
 }
 
-// EvaluateOptions configures a call to [Dataset.Evaluate].
-type EvaluateOptions[I, O, M any] struct {
+// Config configures a call to [Dataset.Evaluate]. The zero value is valid: it
+// runs each case once, unbounded, with the experiment named after the task.
+//
+// Config is intentionally non-generic so that Evaluate calls need no type
+// parameters. For per-case lifecycle hooks, use [Dataset.EvaluateWithLifecycle].
+type Config struct {
 	// Name of the experiment; defaults to TaskName.
 	Name string
-	// TaskName overrides the displayed task name; defaults to "task".
+	// TaskName is the displayed task name; defaults to "task".
 	TaskName string
 	// MaxConcurrency limits concurrent case evaluations; <= 0 means unlimited.
 	MaxConcurrency int
-	// Repeat runs each case this many times (>= 1). Results are grouped by the
-	// original case name for aggregation.
+	// Repeat runs each case this many times (default/zero is treated as 1).
+	// When > 1, results are grouped by the original case name for aggregation.
 	Repeat int
 	// Metadata is arbitrary experiment metadata recorded on the report.
 	Metadata map[string]any
-	// NewLifecycle, if set, is called once per case to obtain its lifecycle hooks.
-	NewLifecycle func(c Case[I, O, M]) Lifecycle[I, O, M]
-}
-
-// EvaluateOption mutates [EvaluateOptions].
-type EvaluateOption[I, O, M any] func(*EvaluateOptions[I, O, M])
-
-// WithName sets the experiment name.
-func WithName[I, O, M any](name string) EvaluateOption[I, O, M] {
-	return func(o *EvaluateOptions[I, O, M]) { o.Name = name }
-}
-
-// WithTaskName sets the displayed task name.
-func WithTaskName[I, O, M any](name string) EvaluateOption[I, O, M] {
-	return func(o *EvaluateOptions[I, O, M]) { o.TaskName = name }
-}
-
-// WithMaxConcurrency limits concurrent case evaluations.
-func WithMaxConcurrency[I, O, M any](n int) EvaluateOption[I, O, M] {
-	return func(o *EvaluateOptions[I, O, M]) { o.MaxConcurrency = n }
-}
-
-// WithRepeat runs each case n times.
-func WithRepeat[I, O, M any](n int) EvaluateOption[I, O, M] {
-	return func(o *EvaluateOptions[I, O, M]) { o.Repeat = n }
-}
-
-// WithExperimentMetadata records experiment metadata on the report.
-func WithExperimentMetadata[I, O, M any](metadata map[string]any) EvaluateOption[I, O, M] {
-	return func(o *EvaluateOptions[I, O, M]) { o.Metadata = metadata }
-}
-
-// WithLifecycle sets a factory invoked once per case to obtain lifecycle hooks.
-func WithLifecycle[I, O, M any](factory func(c Case[I, O, M]) Lifecycle[I, O, M]) EvaluateOption[I, O, M] {
-	return func(o *EvaluateOptions[I, O, M]) { o.NewLifecycle = factory }
 }
 
 type taskToRun[I, O, M any] struct {
@@ -174,31 +143,57 @@ func (d *Dataset[I, O, M]) buildTasksToRun(repeat int) []taskToRun[I, O, M] {
 // Evaluate runs the task against every case in the dataset, applying the
 // dataset-level and case-level evaluators, and returns an [EvaluationReport].
 //
-// Cases run concurrently (bounded by MaxConcurrency). A task error produces a
-// [ReportCaseFailure]; an evaluator error produces an [EvaluatorFailure] on the
-// case rather than failing the case. Evaluate itself only returns an error if
-// the options are invalid or ctx is cancelled.
-func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], opts ...EvaluateOption[I, O, M]) (*EvaluationReport[I, O, M], error) {
-	options := EvaluateOptions[I, O, M]{Repeat: 1, TaskName: "task"}
-	for _, opt := range opts {
-		opt(&options)
+// Cases run concurrently (bounded by cfg.MaxConcurrency). A task error produces
+// a [ReportCaseFailure]; an evaluator error produces an [EvaluatorFailure] on
+// the case rather than failing the case. Evaluate itself only returns an error
+// if the config is invalid or ctx is cancelled.
+//
+// cfg is optional; pass at most one [Config]. For per-case lifecycle hooks, use
+// [Dataset.EvaluateWithLifecycle].
+func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], cfg ...Config) (*EvaluationReport[I, O, M], error) {
+	var c Config
+	if len(cfg) > 0 {
+		c = cfg[0]
 	}
-	if options.Repeat < 1 {
-		return nil, fmt.Errorf("repeat must be >= 1, got %d", options.Repeat)
+	return d.evaluate(ctx, task, c, nil)
+}
+
+// EvaluateWithLifecycle is like [Dataset.Evaluate] but invokes newLifecycle once
+// per case to obtain its [Lifecycle] hooks (Setup, PrepareContext, Teardown).
+func (d *Dataset[I, O, M]) EvaluateWithLifecycle(ctx context.Context, task TaskFunc[I, O], newLifecycle func(c Case[I, O, M]) Lifecycle[I, O, M], cfg ...Config) (*EvaluationReport[I, O, M], error) {
+	var c Config
+	if len(cfg) > 0 {
+		c = cfg[0]
 	}
-	if options.Name == "" {
-		options.Name = options.TaskName
+	return d.evaluate(ctx, task, c, newLifecycle)
+}
+
+func (d *Dataset[I, O, M]) evaluate(ctx context.Context, task TaskFunc[I, O], c Config, newLifecycle func(c Case[I, O, M]) Lifecycle[I, O, M]) (*EvaluationReport[I, O, M], error) {
+	if c.Repeat < 0 {
+		return nil, fmt.Errorf("repeat must be >= 0, got %d", c.Repeat)
+	}
+	repeat := c.Repeat
+	if repeat == 0 {
+		repeat = 1
+	}
+	taskName := c.TaskName
+	if taskName == "" {
+		taskName = "task"
+	}
+	name := c.Name
+	if name == "" {
+		name = taskName
 	}
 
-	tasks := d.buildTasksToRun(options.Repeat)
+	tasks := d.buildTasksToRun(repeat)
 	results := make([]caseResult[I, O, M], len(tasks))
 
-	expCtx, expSpan := startExperimentSpan(ctx, options.Name, options.TaskName, d.Name, len(d.Cases), options.Repeat, options.Metadata)
+	expCtx, expSpan := startExperimentSpan(ctx, name, taskName, d.Name, len(d.Cases), repeat, c.Metadata)
 	defer expSpan.End()
 
 	var sem chan struct{}
-	if options.MaxConcurrency > 0 {
-		sem = make(chan struct{}, options.MaxConcurrency)
+	if c.MaxConcurrency > 0 {
+		sem = make(chan struct{}, c.MaxConcurrency)
 	}
 
 	var wg sync.WaitGroup
@@ -210,7 +205,7 @@ func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], op
 				sem <- struct{}{}
 				defer func() { <-sem }()
 			}
-			results[idx] = d.runCase(expCtx, task, tasks[idx], options.TaskName, options.NewLifecycle)
+			results[idx] = d.runCase(expCtx, task, tasks[idx], taskName, newLifecycle)
 		}(i)
 	}
 	wg.Wait()
@@ -219,7 +214,7 @@ func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], op
 		return nil, err
 	}
 
-	report := &EvaluationReport[I, O, M]{Name: options.Name, ExperimentMetadata: options.Metadata}
+	report := &EvaluationReport[I, O, M]{Name: name, ExperimentMetadata: c.Metadata}
 	for _, r := range results {
 		if r.failure != nil {
 			report.Failures = append(report.Failures, *r.failure)

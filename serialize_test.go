@@ -7,117 +7,154 @@ import (
 	"time"
 )
 
-func newDefaultRegistry[I, O, M any]() *Registry[I, O, M] {
-	reg := NewRegistry[I, O, M]()
+// --- helpers -----------------------------------------------------------------
+
+func mustSave(t *testing.T, ds *Dataset[string, string, string], opts SaveOptions) string {
+	t.Helper()
+	data, err := ds.Save(opts)
+	if err != nil {
+		t.Fatalf("Save(%+v) returned error: %v", opts, err)
+	}
+	return string(data)
+}
+
+func defaultStringRegistry() *Registry[string, string, string] {
+	reg := NewRegistry[string, string, string]()
 	reg.RegisterDefaults()
 	return reg
 }
 
-func TestSaveYAMLDefaultFormat(t *testing.T) {
-	d, err := NewDataset[string, string, map[string]any](
-		"ds",
-		[]Case[string, string, map[string]any]{
-			NewCase[string, string, map[string]any]("in1",
-				WithCaseName[string, string, map[string]any]("c1"),
-				WithExpectedOutput[string, string, map[string]any]("out1"),
-				WithMetadata[string, string, map[string]any](map[string]any{"k": "v"}),
-				WithCaseEvaluators[string, string, map[string]any](
-					Equals[string, string, map[string]any]{Value: "out1"},
-					Contains[string, string, map[string]any]{Value: "o", CaseSensitive: true},
-					IsInstance[string, string, map[string]any]{TypeName: "string"},
-					MaxDuration[string, string, map[string]any]{Max: 1500 * time.Millisecond},
+func loadString(t *testing.T, data string, opts LoadOptions[string, string, string]) *Dataset[string, string, string] {
+	t.Helper()
+	ds, err := LoadDataset([]byte(data), defaultStringRegistry(), opts)
+	if err != nil {
+		t.Fatalf("LoadDataset returned error: %v", err)
+	}
+	return ds
+}
+
+func loadStringErr(data string, opts LoadOptions[string, string, string]) error {
+	_, err := LoadDataset([]byte(data), defaultStringRegistry(), opts)
+	return err
+}
+
+func assertContains(t *testing.T, got, want string) {
+	t.Helper()
+	if !strings.Contains(got, want) {
+		t.Fatalf("expected %q to contain %q", got, want)
+	}
+}
+
+// --- a dataset exercising every short-form an evaluator can take -------------
+
+func allBuiltinsDataset(t *testing.T) *Dataset[string, string, string] {
+	t.Helper()
+	ds, err := NewDataset(
+		"greet",
+		[]Case[string, string, string]{
+			NewCase[string, string, string](
+				"hi",
+				WithCaseName[string, string, string]("c1"),
+				WithExpectedOutput[string, string, string]("HI"),
+				WithMetadata[string, string, string]("m1"),
+				WithCaseEvaluators[string, string, string](
+					Equals[string, string, string]{Value: "HI"},
+					EqualsExpected[string, string, string]{},
+					Contains[string, string, string]{Value: "H"},
+					IsInstance[string, string, string]{TypeName: "string"},
+					MaxDuration[string, string, string]{Max: 1500 * time.Millisecond},
 				),
 			),
 		},
-		EqualsExpected[string, string, map[string]any]{},
+		EqualsExpected[string, string, string]{},
 	)
 	if err != nil {
 		t.Fatalf("NewDataset: %v", err)
 	}
+	return ds
+}
 
-	got, err := d.Save(SaveOptions{})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	want := `name: ds
+func TestSaveYAMLDefault(t *testing.T) {
+	ds := allBuiltinsDataset(t)
+	const want = `name: greet
 cases:
   - name: c1
-    inputs: in1
-    metadata:
-      k: v
-    expected_output: out1
+    inputs: hi
+    metadata: m1
+    expected_output: HI
     evaluators:
       - Equals:
-          value: out1
+          value: HI
+      - EqualsExpected
       - Contains:
-          case_sensitive: true
-          value: o
+          value: H
       - IsInstance: string
       - MaxDuration: 1.5
 evaluators:
   - EqualsExpected
 `
-	if string(got) != want {
-		t.Fatalf("YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	if got := mustSave(t, ds, SaveOptions{}); got != want {
+		t.Fatalf("default YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	// Format: "yaml" is identical to the default.
+	if got := mustSave(t, ds, SaveOptions{Format: "yaml"}); got != want {
+		t.Fatalf("explicit yaml mismatch:\n--- got ---\n%s", got)
 	}
 }
 
 func TestSaveYAMLWithSchema(t *testing.T) {
-	d, err := NewDataset[string, string, map[string]any]("ds", []Case[string, string, map[string]any]{
-		NewCase[string, string, map[string]any]("in1", WithCaseName[string, string, map[string]any]("c1")),
-	})
-	if err != nil {
-		t.Fatalf("NewDataset: %v", err)
-	}
-	got, err := d.Save(SaveOptions{Format: "yaml", Schema: "schema.json"})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	want := `# yaml-language-server: $schema=schema.json
-$schema: schema.json
-name: ds
+	ds := allBuiltinsDataset(t)
+	const want = `# yaml-language-server: $schema=./schema.json
+$schema: ./schema.json
+name: greet
 cases:
   - name: c1
-    inputs: in1
+    inputs: hi
+    metadata: m1
+    expected_output: HI
+    evaluators:
+      - Equals:
+          value: HI
+      - EqualsExpected
+      - Contains:
+          value: H
+      - IsInstance: string
+      - MaxDuration: 1.5
+evaluators:
+  - EqualsExpected
 `
-	if string(got) != want {
-		t.Fatalf("YAML+schema mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	if got := mustSave(t, ds, SaveOptions{Format: "yaml", Schema: "./schema.json"}); got != want {
+		t.Fatalf("schema YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
 func TestSaveJSON(t *testing.T) {
-	d, err := NewDataset[string, string, map[string]any]("ds", []Case[string, string, map[string]any]{
-		NewCase[string, string, map[string]any]("in1",
-			WithCaseName[string, string, map[string]any]("c1"),
-			WithExpectedOutput[string, string, map[string]any]("out1"),
-			WithMetadata[string, string, map[string]any](map[string]any{"k": "v"}),
-			WithCaseEvaluators[string, string, map[string]any](
-				IsInstance[string, string, map[string]any]{TypeName: "string"},
-			),
-		),
-	}, EqualsExpected[string, string, map[string]any]{})
-	if err != nil {
-		t.Fatalf("NewDataset: %v", err)
-	}
-
-	got, err := d.Save(SaveOptions{Format: "json"})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	want := `{
-  "name": "ds",
+	ds := allBuiltinsDataset(t)
+	const want = `{
+  "name": "greet",
   "cases": [
     {
       "name": "c1",
-      "inputs": "in1",
-      "metadata": {
-        "k": "v"
-      },
-      "expected_output": "out1",
+      "inputs": "hi",
+      "metadata": "m1",
+      "expected_output": "HI",
       "evaluators": [
         {
+          "Equals": {
+            "value": "HI"
+          }
+        },
+        "EqualsExpected",
+        {
+          "Contains": {
+            "value": "H"
+          }
+        },
+        {
           "IsInstance": "string"
+        },
+        {
+          "MaxDuration": 1.5
         }
       ]
     }
@@ -127,977 +164,817 @@ func TestSaveJSON(t *testing.T) {
   ]
 }
 `
-	if string(got) != want {
+	if got := mustSave(t, ds, SaveOptions{Format: "json"}); got != want {
 		t.Fatalf("JSON mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
 func TestSaveJSONWithSchema(t *testing.T) {
-	d, err := NewDataset[string, string, map[string]any]("ds", []Case[string, string, map[string]any]{
-		NewCase[string, string, map[string]any]("in1", WithCaseName[string, string, map[string]any]("c1")),
-	})
-	if err != nil {
-		t.Fatalf("NewDataset: %v", err)
-	}
-	got, err := d.Save(SaveOptions{Format: "json", Schema: "schema.json"})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	want := `{
-  "$schema": "schema.json",
-  "name": "ds",
+	ds := allBuiltinsDataset(t)
+	const want = `{
+  "$schema": "./schema.json",
+  "name": "greet",
   "cases": [
     {
       "name": "c1",
-      "inputs": "in1"
+      "inputs": "hi",
+      "metadata": "m1",
+      "expected_output": "HI",
+      "evaluators": [
+        {
+          "Equals": {
+            "value": "HI"
+          }
+        },
+        "EqualsExpected",
+        {
+          "Contains": {
+            "value": "H"
+          }
+        },
+        {
+          "IsInstance": "string"
+        },
+        {
+          "MaxDuration": 1.5
+        }
+      ]
     }
+  ],
+  "evaluators": [
+    "EqualsExpected"
   ]
 }
 `
-	if string(got) != want {
-		t.Fatalf("JSON+schema mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	if got := mustSave(t, ds, SaveOptions{Format: "json", Schema: "./schema.json"}); got != want {
+		t.Fatalf("JSON schema mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
 func TestSaveUnknownFormat(t *testing.T) {
-	d, err := NewDataset[string, string, map[string]any]("ds", []Case[string, string, map[string]any]{
-		NewCase[string, string, map[string]any]("in1"),
-	})
-	if err != nil {
-		t.Fatalf("NewDataset: %v", err)
-	}
-	_, err = d.Save(SaveOptions{Format: "toml"})
+	ds := allBuiltinsDataset(t)
+	_, err := ds.Save(SaveOptions{Format: "toml"})
 	if err == nil {
 		t.Fatal("expected error for unknown format")
 	}
-	want := `unknown format "toml" (want "yaml" or "json")`
-	if err.Error() != want {
-		t.Fatalf("error mismatch: got %q want %q", err.Error(), want)
+	if got := err.Error(); got != `unknown format "toml" (want "yaml" or "json")` {
+		t.Fatalf("unexpected error: %q", got)
 	}
 }
 
-func TestSaveJSONMarshalError(t *testing.T) {
-	d := &Dataset[any, any, any]{
-		Name:  "ds",
-		Cases: []Case[any, any, any]{{Name: "c1", Inputs: make(chan int)}},
-	}
-	_, err := d.Save(SaveOptions{Format: "json"})
-	if err == nil {
-		t.Fatal("expected marshal error for unsupported input type")
-	}
-	if !strings.Contains(err.Error(), "unsupported type") {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
+// --- evaluator spec short forms, including the named (kwargs) variants -------
 
-func TestSpecConstructorsThroughSave(t *testing.T) {
-	reg := NewRegistry[string, string, map[string]any]()
-	reg.Register("Bare", func(EvaluatorSpec) (Evaluator[string, string, map[string]any], error) {
-		return specEvaluator{spec: NewSpec("Bare")}, nil
-	})
-	reg.Register("Arg", func(EvaluatorSpec) (Evaluator[string, string, map[string]any], error) {
-		return specEvaluator{spec: NewSpecArg("Arg", "hello")}, nil
-	})
-	reg.Register("Kw", func(EvaluatorSpec) (Evaluator[string, string, map[string]any], error) {
-		return specEvaluator{spec: NewSpecKwargs("Kw", map[string]any{"x": "y"})}, nil
-	})
-
-	d, err := NewDataset[string, string, map[string]any]("ds", []Case[string, string, map[string]any]{
-		NewCase[string, string, map[string]any]("in1", WithCaseName[string, string, map[string]any]("c1")),
-	},
-		specEvaluator{spec: NewSpec("Bare")},
-		specEvaluator{spec: NewSpecArg("Arg", "hello")},
-		specEvaluator{spec: NewSpecKwargs("Kw", map[string]any{"x": "y"})},
+func TestSaveEvaluatorKwargsAndNamedForms(t *testing.T) {
+	ds, err := NewDataset[string, string, string](
+		"d",
+		[]Case[string, string, string]{NewCase[string, string, string]("hi")},
+		Equals[string, string, string]{Value: "v", Name: "eqname"},
+		EqualsExpected[string, string, string]{Name: "eename"},
+		Contains[string, string, string]{Value: "x", CaseSensitive: true, AsStrings: true, Name: "myc"},
+		IsInstance[string, string, string]{TypeName: "string", Name: "isname"},
 	)
 	if err != nil {
 		t.Fatalf("NewDataset: %v", err)
 	}
-
-	got, err := d.Save(SaveOptions{})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	want := `name: ds
+	const want = `name: d
 cases:
-  - name: c1
-    inputs: in1
+  - inputs: hi
+evaluators:
+  - Equals:
+      evaluation_name: eqname
+      value: v
+  - EqualsExpected:
+      evaluation_name: eename
+  - Contains:
+      as_strings: true
+      case_sensitive: true
+      evaluation_name: myc
+      value: x
+  - IsInstance:
+      evaluation_name: isname
+      type_name: string
+`
+	if got := mustSave(t, ds, SaveOptions{}); got != want {
+		t.Fatalf("kwargs YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// A custom evaluator without Spec() serializes as just its Go type name.
+type customNoSpec struct{}
+
+func (customNoSpec) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, string]) (Output, error) {
+	return Assertion(true), nil
+}
+
+func TestSaveEvaluatorWithoutSpec(t *testing.T) {
+	ds, err := NewDataset[string, string, string](
+		"d",
+		[]Case[string, string, string]{NewCase[string, string, string]("hi")},
+		customNoSpec{},
+	)
+	if err != nil {
+		t.Fatalf("NewDataset: %v", err)
+	}
+	const want = `name: d
+cases:
+  - inputs: hi
+evaluators:
+  - customNoSpec
+`
+	if got := mustSave(t, ds, SaveOptions{}); got != want {
+		t.Fatalf("no-spec YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// --- spec constructors observed via Save -------------------------------------
+
+type specConstructorEval struct {
+	spec EvaluatorSpec
+}
+
+func (e specConstructorEval) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, string]) (Output, error) {
+	return Assertion(true), nil
+}
+func (e specConstructorEval) Spec() EvaluatorSpec { return e.spec }
+
+func TestSaveSpecConstructors(t *testing.T) {
+	ds, err := NewDataset[string, string, string](
+		"d",
+		[]Case[string, string, string]{NewCase[string, string, string]("hi")},
+		specConstructorEval{spec: NewSpec("Bare")},
+		specConstructorEval{spec: NewSpecArg("Arg", 7)},
+		specConstructorEval{spec: NewSpecKwargs("Kw", map[string]any{"k": "v"})},
+	)
+	if err != nil {
+		t.Fatalf("NewDataset: %v", err)
+	}
+	const want = `name: d
+cases:
+  - inputs: hi
 evaluators:
   - Bare
-  - Arg: hello
+  - Arg: 7
   - Kw:
-      x: "y"
-`
-	if string(got) != want {
-		t.Fatalf("spec short-form mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
-	}
-}
-
-func TestLoadDatasetYAML(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: yds
-cases:
-  - name: c1
-    inputs: in1
-    metadata:
       k: v
-    expected_output: out1
-    evaluators:
-      - EqualsExpected
-`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
-	if ds.Name != "yds" {
-		t.Fatalf("name = %q", ds.Name)
-	}
-	if len(ds.Cases) != 1 {
-		t.Fatalf("cases = %d", len(ds.Cases))
-	}
-	c := ds.Cases[0]
-	if c.Name != "c1" || c.Inputs != "in1" || c.ExpectedOutput != "out1" {
-		t.Fatalf("case = %#v", c)
-	}
-	if !c.HasMetadata || c.Metadata["k"] != "v" {
-		t.Fatalf("metadata = %#v has=%v", c.Metadata, c.HasMetadata)
-	}
-	if !c.HasExpectedOutput {
-		t.Fatal("expected HasExpectedOutput")
-	}
-	if len(c.Evaluators) != 1 {
-		t.Fatalf("case evaluators = %d", len(c.Evaluators))
+`
+	if got := mustSave(t, ds, SaveOptions{}); got != want {
+		t.Fatalf("spec constructor YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
-func TestLoadDatasetJSONInferredFormat(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`{"name":"jds","cases":[{"name":"c1","inputs":"in1"}]}`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
+// --- Save marshal-error paths (a value YAML/JSON cannot encode) --------------
+
+type chanInput struct {
+	Ch chan int
+}
+
+func channelDataset(t *testing.T) *Dataset[chanInput, string, string] {
+	t.Helper()
+	ds, err := NewDataset[chanInput, string, string](
+		"d",
+		[]Case[chanInput, string, string]{
+			NewCase[chanInput, string, string](chanInput{Ch: make(chan int)}),
+		},
+	)
 	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
+		t.Fatalf("NewDataset: %v", err)
 	}
-	if ds.Name != "jds" || len(ds.Cases) != 1 || ds.Cases[0].Inputs != "in1" {
-		t.Fatalf("ds = %#v", ds)
+	return ds
+}
+
+func TestSaveYAMLMarshalError(t *testing.T) {
+	ds := channelDataset(t)
+	_, err := ds.Save(SaveOptions{Format: "yaml"})
+	if err == nil {
+		t.Fatal("expected YAML marshal error for channel value")
+	}
+	assertContains(t, err.Error(), "encoding dataset YAML")
+}
+
+func TestSaveJSONMarshalError(t *testing.T) {
+	ds := channelDataset(t)
+	_, err := ds.Save(SaveOptions{Format: "json"})
+	if err == nil {
+		t.Fatal("expected JSON marshal error for channel value")
+	}
+	assertContains(t, err.Error(), "unsupported type: chan int")
+}
+
+// --- LoadDataset: format inference and explicit format -----------------------
+
+func TestLoadFormatInference(t *testing.T) {
+	yaml := "name: d\ncases:\n  - inputs: x\nevaluators:\n  - EqualsExpected\n"
+	if ds := loadString(t, yaml, LoadOptions[string, string, string]{}); ds.Name != "d" || len(ds.Evaluators) != 1 {
+		t.Fatalf("inferred yaml load wrong: %+v", ds)
+	}
+
+	json := `{"name":"jd","cases":[{"inputs":"x"}],"evaluators":["EqualsExpected"]}`
+	if ds := loadString(t, json, LoadOptions[string, string, string]{}); ds.Name != "jd" || len(ds.Evaluators) != 1 {
+		t.Fatalf("inferred json load wrong: %+v", ds)
+	}
+
+	// Leading whitespace before '{' must still infer JSON.
+	if ds := loadString(t, "  "+json, LoadOptions[string, string, string]{}); ds.Name != "jd" {
+		t.Fatalf("whitespace json load wrong: %+v", ds)
+	}
+
+	// Explicit json format on bytes that don't start with '{'.
+	wrapped := loadString(t, json, LoadOptions[string, string, string]{Format: "json"})
+	if wrapped.Name != "jd" {
+		t.Fatalf("explicit json load wrong: %+v", wrapped)
 	}
 }
 
-func TestLoadDatasetJSONExplicitFormat(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`{"name":"jds","cases":[{"name":"c1","inputs":"in1"}]}`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{Format: "json"})
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
-	if ds.Name != "jds" {
-		t.Fatalf("name = %q", ds.Name)
-	}
-}
-
-func TestLoadDatasetDefaultName(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`cases:
-  - inputs: in1
-`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{DefaultName: "fallback"})
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
+func TestLoadDefaultName(t *testing.T) {
+	ds := loadString(t, "cases:\n  - inputs: x\n", LoadOptions[string, string, string]{DefaultName: "fallback"})
 	if ds.Name != "fallback" {
-		t.Fatalf("name = %q want fallback", ds.Name)
+		t.Fatalf("expected fallback name, got %q", ds.Name)
+	}
+	// A name in the data wins over DefaultName.
+	ds = loadString(t, "name: real\ncases:\n  - inputs: x\n", LoadOptions[string, string, string]{DefaultName: "fallback"})
+	if ds.Name != "real" {
+		t.Fatalf("expected data name, got %q", ds.Name)
 	}
 }
 
-func TestLoadDatasetMissingNameError(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`cases:
-  - inputs: in1
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err == nil {
-		t.Fatal("expected missing name error")
-	}
-	want := "dataset name is required: provide one in the data or via DefaultName"
-	if err.Error() != want {
-		t.Fatalf("error = %q want %q", err.Error(), want)
-	}
-}
-
-func TestLoadDatasetUnknownFormat(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	_, err := LoadDataset[string, string, map[string]any]([]byte("name: x"), reg, LoadOptions[string, string, map[string]any]{Format: "toml"})
-	if err == nil {
-		t.Fatal("expected unknown format error")
-	}
-	want := `unknown format "toml" (want "yaml" or "json")`
-	if err.Error() != want {
-		t.Fatalf("error = %q want %q", err.Error(), want)
-	}
-}
-
-func TestLoadDatasetMalformedYAML(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	_, err := LoadDataset[string, string, map[string]any]([]byte("name: x\n\tbad: : :"), reg, LoadOptions[string, string, map[string]any]{Format: "yaml"})
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
-	if !strings.HasPrefix(err.Error(), "parsing dataset YAML: ") {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestLoadDatasetMalformedJSON(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	_, err := LoadDataset[string, string, map[string]any]([]byte(`{"name": `), reg, LoadOptions[string, string, map[string]any]{Format: "json"})
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
-	if !strings.HasPrefix(err.Error(), "parsing dataset JSON: ") {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestLoadDatasetUnregisteredEvaluator(t *testing.T) {
-	reg := NewRegistry[string, string, map[string]any]()
-	data := []byte(`name: x
-cases:
-  - inputs: in1
-    evaluators:
-      - Mystery
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err == nil {
-		t.Fatal("expected unregistered evaluator error")
-	}
-	if !strings.Contains(err.Error(), `evaluator "Mystery" is not registered`) {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestLoadDatasetUnregisteredDatasetEvaluator(t *testing.T) {
-	reg := NewRegistry[string, string, map[string]any]()
-	data := []byte(`name: x
-cases:
-  - inputs: in1
-evaluators:
-  - Mystery
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err == nil {
-		t.Fatal("expected unregistered dataset evaluator error")
-	}
-	if !strings.Contains(err.Error(), `evaluator "Mystery" is not registered`) {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestLoadDatasetUnregisteredListsValidChoices(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: x
-cases:
-  - inputs: in1
-    evaluators:
-      - Mystery
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err == nil {
-		t.Fatal("expected unregistered evaluator error")
-	}
-	for _, choice := range []string{"Equals", "EqualsExpected", "Contains", "IsInstance", "MaxDuration"} {
-		if !strings.Contains(err.Error(), choice) {
-			t.Fatalf("error %q missing valid choice %q", err.Error(), choice)
-		}
-	}
-}
-
-func TestLoadDatasetDatasetLevelEvaluator(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: x
-cases:
-  - name: c1
-    inputs: in1
-evaluators:
-  - IsInstance: string
-`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
-	if len(ds.Evaluators) != 1 {
-		t.Fatalf("dataset evaluators = %d want 1", len(ds.Evaluators))
-	}
-	rep, err := ds.Evaluate(context.Background(), func(_ context.Context, _ string) (string, error) {
-		return "x", nil
-	})
-	if err != nil {
-		t.Fatalf("Evaluate: %v", err)
-	}
-	if v := assertionValue(t, rep.Cases[0], "IsInstance"); v != Bool(true) {
-		t.Fatalf("IsInstance = %v want True", v)
-	}
-}
-
-func TestLoadDatasetDatasetEvaluatorParseError(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: x
-cases:
-  - inputs: in1
-evaluators:
-  - 42
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err == nil {
-		t.Fatal("expected parse error for numeric dataset evaluator")
-	}
-	if !strings.Contains(err.Error(), "invalid evaluator spec") {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestParseSpecInvalidScalarEvaluator(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: x
-cases:
-  - inputs: in1
-    evaluators:
-      - 42
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err == nil {
-		t.Fatal("expected parse error for numeric evaluator")
-	}
-	want := "invalid evaluator spec: expected string or single-key mapping, got int"
-	if err.Error() != want {
-		t.Fatalf("error = %q want %q", err.Error(), want)
-	}
-}
-
-func TestLoadDatasetDefaultDecoderUnmarshalError(t *testing.T) {
-	reg := newDefaultRegistry[structIn, structOut, structMeta]()
-	data := []byte(`name: ds
-cases:
-  - name: c1
-    inputs: not-a-struct
-`)
-	_, err := LoadDataset[structIn, structOut, structMeta](data, reg, LoadOptions[structIn, structOut, structMeta]{})
-	if err == nil {
-		t.Fatal("expected default-decoder unmarshal error")
-	}
-	if !strings.Contains(err.Error(), `case "c1" inputs:`) {
-		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestLoadDatasetNonStringMapKeysNormalized(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: ds
-cases:
-  - name: c1
-    inputs: in1
-    metadata:
-      1: a
-      2: b
-`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
-	c := ds.Cases[0]
-	if !c.HasMetadata {
-		t.Fatal("expected metadata")
-	}
-	if c.Metadata["1"] != "a" || c.Metadata["2"] != "b" {
-		t.Fatalf("metadata = %#v want normalized string keys", c.Metadata)
-	}
-}
-
-func TestParseSpecForms(t *testing.T) {
+func TestLoadErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		yaml       string
-		wantName   string
-		wantArgs   []any
-		wantKwargs map[string]any
+		name string
+		data string
+		opts LoadOptions[string, string, string]
+		want string
 	}{
 		{
-			name:     "bare string",
-			yaml:     "Custom",
-			wantName: "Custom",
+			name: "missing name",
+			data: "cases:\n  - inputs: x\n",
+			want: "dataset name is required: provide one in the data or via DefaultName",
 		},
 		{
-			name:     "single key scalar positional",
-			yaml:     "Custom: 42",
-			wantName: "Custom",
-			wantArgs: []any{42},
+			name: "unknown explicit format",
+			data: "name: d\ncases: []\n",
+			opts: LoadOptions[string, string, string]{Format: "toml"},
+			want: `unknown format "toml" (want "yaml" or "json")`,
 		},
 		{
-			name:     "single key list positional",
-			yaml:     "Custom: [a, b]",
-			wantName: "Custom",
-			wantArgs: []any{[]any{"a", "b"}},
+			name: "malformed yaml",
+			data: "name: d\ncases: [unterminated\n",
+			want: "parsing dataset YAML:",
 		},
 		{
-			name:       "single key string-map kwargs",
-			yaml:       "Custom: {x: 1, y: hi}",
-			wantName:   "Custom",
-			wantKwargs: map[string]any{"x": 1, "y": "hi"},
+			name: "malformed json",
+			data: "{not json",
+			want: "parsing dataset JSON:",
+		},
+		{
+			name: "unregistered evaluator",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - Nope\n",
+			want: `evaluator "Nope" is not registered`,
+		},
+		{
+			name: "multi-key map spec",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - {Equals: 1, Extra: 2}\n",
+			want: "expected a single key containing the evaluator name, found keys [Equals Extra]",
+		},
+		{
+			name: "invalid spec type",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - [a, b]\n",
+			want: "invalid evaluator spec: expected string or single-key mapping, got []interface {}",
+		},
+		{
+			name: "duplicate case name",
+			data: "name: d\ncases:\n  - name: dup\n    inputs: a\n  - name: dup\n    inputs: b\n",
+			want: `duplicate case name: "dup"`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var captured EvaluatorSpec
-			reg := NewRegistry[string, string, map[string]any]()
-			reg.Register("Custom", func(spec EvaluatorSpec) (Evaluator[string, string, map[string]any], error) {
-				captured = spec
-				return specEvaluator{spec: spec}, nil
-			})
-			data := []byte("name: ds\ncases:\n  - inputs: in1\n    evaluators:\n      - " + tt.yaml + "\n")
-			_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-			if err != nil {
-				t.Fatalf("LoadDataset: %v", err)
+			err := loadStringErr(tt.data, tt.opts)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
 			}
-			if captured.Name != tt.wantName {
-				t.Fatalf("name = %q want %q", captured.Name, tt.wantName)
-			}
-			if len(captured.Args) != len(tt.wantArgs) {
-				t.Fatalf("args = %#v want %#v", captured.Args, tt.wantArgs)
-			}
-			for i := range tt.wantArgs {
-				if !equalAny(captured.Args[i], tt.wantArgs[i]) {
-					t.Fatalf("arg[%d] = %#v want %#v", i, captured.Args[i], tt.wantArgs[i])
-				}
-			}
-			if len(captured.Kwargs) != len(tt.wantKwargs) {
-				t.Fatalf("kwargs = %#v want %#v", captured.Kwargs, tt.wantKwargs)
-			}
-			for k, v := range tt.wantKwargs {
-				if !equalAny(captured.Kwargs[k], v) {
-					t.Fatalf("kwargs[%q] = %#v want %#v", k, captured.Kwargs[k], v)
-				}
-			}
+			assertContains(t, err.Error(), tt.want)
 		})
 	}
 }
 
-func TestParseSpecMultiKeyMapError(t *testing.T) {
-	reg := NewRegistry[string, string, map[string]any]()
-	reg.Register("Custom", func(spec EvaluatorSpec) (Evaluator[string, string, map[string]any], error) {
-		return specEvaluator{spec: spec}, nil
-	})
-	data := []byte(`name: ds
-cases:
-  - inputs: in1
-    evaluators:
-      - {A: 1, B: 2}
-`)
-	_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
+// The unregistered-evaluator error lists the valid choices in non-deterministic
+// (map iteration) order, so we assert membership rather than a fixed ordering.
+func TestLoadUnregisteredListsChoices(t *testing.T) {
+	err := loadStringErr("name: d\ncases:\n  - inputs: x\nevaluators:\n  - Nope\n", LoadOptions[string, string, string]{})
 	if err == nil {
-		t.Fatal("expected multi-key spec error")
+		t.Fatal("expected error")
 	}
-	want := "expected a single key containing the evaluator name, found keys [A B]"
-	if err.Error() != want {
-		t.Fatalf("error = %q want %q", err.Error(), want)
+	msg := err.Error()
+	for _, name := range []string{"Equals", "EqualsExpected", "Contains", "IsInstance", "MaxDuration"} {
+		assertContains(t, msg, name)
+	}
+	assertContains(t, msg, "register it before loading")
+}
+
+// --- factory instantiate errors for the built-ins ----------------------------
+
+func TestLoadFactoryInstantiateErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "isinstance no type_name",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - IsInstance: {}\n",
+			want: `failed to instantiate evaluator "IsInstance" for dataset: IsInstance requires a type_name`,
+		},
+		{
+			name: "isinstance type_name not string",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - IsInstance: 5\n",
+			want: `failed to instantiate evaluator "IsInstance" for dataset: IsInstance type_name must be a string, got int`,
+		},
+		{
+			name: "maxduration no seconds",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: {}\n",
+			want: `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration requires seconds`,
+		},
+		{
+			name: "maxduration non-numeric seconds",
+			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: notanumber\n",
+			want: `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration seconds: expected a number, got string`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := loadStringErr(tt.data, LoadOptions[string, string, string]{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			assertContains(t, err.Error(), tt.want)
+		})
 	}
 }
 
-func TestRegisterCustomEvaluatorRoundTrip(t *testing.T) {
-	reg := NewRegistry[string, string, map[string]any]()
-	reg.Register("StartsWith", func(spec EvaluatorSpec) (Evaluator[string, string, map[string]any], error) {
-		prefix, _ := spec.Args[0].(string)
-		return startsWith{prefix: prefix}, nil
+// The factory error message uses the per-case context when the failure happens
+// on a case-level evaluator rather than a dataset-level one.
+func TestLoadFactoryErrorCaseContext(t *testing.T) {
+	data := "name: d\ncases:\n  - name: c1\n    inputs: x\n    evaluators:\n      - MaxDuration: {}\n"
+	err := loadStringErr(data, LoadOptions[string, string, string]{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertContains(t, err.Error(), `failed to instantiate evaluator "MaxDuration" for case "c1": MaxDuration requires seconds`)
+}
+
+// A malformed spec on a case-level evaluator (as opposed to a dataset-level one)
+// surfaces the parse error too.
+func TestLoadCaseLevelSpecParseError(t *testing.T) {
+	data := "name: d\ncases:\n  - name: c1\n    inputs: x\n    evaluators:\n      - {Equals: 1, Extra: 2}\n"
+	err := loadStringErr(data, LoadOptions[string, string, string]{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertContains(t, err.Error(), "expected a single key containing the evaluator name, found keys [Equals Extra]")
+}
+
+// MaxDuration via kwargs rejects a non-numeric seconds value.
+func TestLoadMaxDurationKwargsNonNumeric(t *testing.T) {
+	data := "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration:\n      seconds: notanumber\n"
+	err := loadStringErr(data, LoadOptions[string, string, string]{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertContains(t, err.Error(), `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration seconds: expected a number, got string`)
+}
+
+// EqualsExpected carries its evaluation_name through the kwargs form on load.
+func TestLoadEqualsExpectedKwargsEvaluationName(t *testing.T) {
+	data := "name: d\ncases:\n  - inputs: x\nevaluators:\n  - EqualsExpected:\n      evaluation_name: en\n"
+	ds := loadString(t, data, LoadOptions[string, string, string]{})
+	e, ok := ds.Evaluators[0].(EqualsExpected[string, string, string])
+	if !ok {
+		t.Fatalf("expected EqualsExpected, got %T", ds.Evaluators[0])
+	}
+	if e.Name != "en" {
+		t.Fatalf("EqualsExpected.Name = %q, want en", e.Name)
+	}
+}
+
+// Equals carries its evaluation_name through the kwargs form on load.
+func TestLoadEqualsKwargsEvaluationName(t *testing.T) {
+	data := "name: d\ncases:\n  - inputs: x\nevaluators:\n  - Equals:\n      value: hi\n      evaluation_name: en\n"
+	ds := loadString(t, data, LoadOptions[string, string, string]{})
+	e, ok := ds.Evaluators[0].(Equals[string, string, string])
+	if !ok {
+		t.Fatalf("expected Equals, got %T", ds.Evaluators[0])
+	}
+	if e.Value != "hi" || e.Name != "en" {
+		t.Fatalf("Equals = %+v", e)
+	}
+	if e.EvaluationName() != "en" {
+		t.Fatalf("EvaluationName = %q, want en", e.EvaluationName())
+	}
+}
+
+// Equals' value must be JSON-compatible with the output type O.
+func TestLoadEqualsIncompatibleValue(t *testing.T) {
+	reg := NewRegistry[string, int, string]()
+	reg.RegisterDefaults()
+	_, err := LoadDataset(
+		[]byte("name: d\ncases:\n  - inputs: x\nevaluators:\n  - Equals: notanint\n"),
+		reg,
+		LoadOptions[string, int, string]{},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertContains(t, err.Error(), `failed to instantiate evaluator "Equals" for dataset: Equals value:`)
+	assertContains(t, err.Error(), "cannot unmarshal string into Go value of type int")
+}
+
+// MaxDuration accepts seconds via kwargs as well as a single positional arg.
+func TestLoadMaxDurationKwargs(t *testing.T) {
+	ds := loadString(t, "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration:\n      seconds: 2.5\n", LoadOptions[string, string, string]{})
+	md, ok := ds.Evaluators[0].(MaxDuration[string, string, string])
+	if !ok {
+		t.Fatalf("expected MaxDuration, got %T", ds.Evaluators[0])
+	}
+	if md.Max != 2500*time.Millisecond {
+		t.Fatalf("expected 2.5s, got %v", md.Max)
+	}
+}
+
+// MaxDuration accepts an integer seconds value (YAML decodes it as int).
+func TestLoadMaxDurationIntSeconds(t *testing.T) {
+	ds := loadString(t, "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: 3\n", LoadOptions[string, string, string]{})
+	md := ds.Evaluators[0].(MaxDuration[string, string, string])
+	if md.Max != 3*time.Second {
+		t.Fatalf("expected 3s, got %v", md.Max)
+	}
+}
+
+// --- parse forms: bare name, positional arg, kwargs --------------------------
+
+func TestLoadParseForms(t *testing.T) {
+	data := "name: d\ncases:\n  - inputs: x\nevaluators:\n" +
+		"  - EqualsExpected\n" + // bare name
+		"  - IsInstance: string\n" + // single positional (scalar)
+		"  - Equals: HELLO\n" + // single positional (scalar)
+		"  - Contains: ell\n" + // single positional (scalar)
+		"  - EqualsExpected: posname\n" + // positional string -> Name
+		"  - Equals:\n      value: hi\n      evaluation_name: en\n" + // kwargs (string-keyed map)
+		"  - Contains:\n      value: hi\n      case_sensitive: true\n      as_strings: true\n      evaluation_name: cn\n"
+	ds := loadString(t, data, LoadOptions[string, string, string]{})
+	if len(ds.Evaluators) != 7 {
+		t.Fatalf("expected 7 evaluators, got %d", len(ds.Evaluators))
+	}
+
+	if _, ok := ds.Evaluators[0].(EqualsExpected[string, string, string]); !ok {
+		t.Fatalf("evaluators[0] = %T, want EqualsExpected", ds.Evaluators[0])
+	}
+	if e := ds.Evaluators[1].(IsInstance[string, string, string]); e.TypeName != "string" {
+		t.Fatalf("evaluators[1] = %+v", e)
+	}
+	if e := ds.Evaluators[2].(Equals[string, string, string]); e.Value != "HELLO" {
+		t.Fatalf("evaluators[2] = %+v", e)
+	}
+	if e := ds.Evaluators[3].(Contains[string, string, string]); e.Value != "ell" {
+		t.Fatalf("evaluators[3] = %+v", e)
+	}
+	if e := ds.Evaluators[4].(EqualsExpected[string, string, string]); e.Name != "posname" {
+		t.Fatalf("evaluators[4] = %+v", e)
+	}
+	if e := ds.Evaluators[5].(Equals[string, string, string]); e.Value != "hi" || e.Name != "en" {
+		t.Fatalf("evaluators[5] = %+v", e)
+	}
+	if e := ds.Evaluators[6].(Contains[string, string, string]); e.Value != "hi" || !e.CaseSensitive || !e.AsStrings || e.Name != "cn" {
+		t.Fatalf("evaluators[6] = %+v", e)
+	}
+}
+
+// --- a custom factory used during a load -------------------------------------
+
+type wordCount struct {
+	Min int
+}
+
+func (w wordCount) Evaluate(_ context.Context, ec *EvaluatorContext[string, string, string]) (Output, error) {
+	return Assertion(len(strings.Fields(ec.Output)) >= w.Min), nil
+}
+
+func (w wordCount) Spec() EvaluatorSpec {
+	return NewSpecKwargs("WordCount", map[string]any{"min": w.Min})
+}
+
+func TestLoadCustomFactory(t *testing.T) {
+	reg := NewRegistry[string, string, string]()
+	reg.RegisterDefaults()
+	reg.Register("WordCount", func(spec EvaluatorSpec) (Evaluator[string, string, string], error) {
+		min := 0
+		switch v := spec.Kwargs["min"].(type) {
+		case int:
+			min = v
+		case float64:
+			min = int(v)
+		}
+		return wordCount{Min: min}, nil
 	})
-	data := []byte(`name: ds
-cases:
-  - name: c1
-    inputs: in1
-    evaluators:
-      - StartsWith: hel
-`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
+
+	data := []byte("name: d\ncases:\n  - inputs: x\n    expected_output: hello world\nevaluators:\n  - WordCount:\n      min: 2\n")
+	ds, err := LoadDataset(data, reg, LoadOptions[string, string, string]{})
 	if err != nil {
 		t.Fatalf("LoadDataset: %v", err)
 	}
 	rep, err := ds.Evaluate(context.Background(), func(_ context.Context, in string) (string, error) {
-		return "hello", nil
+		return "hello world", nil
 	})
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	got := assertionValue(t, rep.Cases[0], "StartsWith")
-	if got != Bool(true) {
-		t.Fatalf("StartsWith = %v want True", got)
+	res, ok := rep.Cases[0].Assertions["WordCount"]
+	if !ok {
+		t.Fatalf("missing WordCount assertion: %+v", rep.Cases[0].Assertions)
+	}
+	if res.Value != Bool(true) {
+		t.Fatalf("WordCount assertion = %v, want True", res.Value)
+	}
+	if res.Source.Name != "WordCount" || res.Source.Kwargs["min"] != 2 {
+		t.Fatalf("unexpected source spec: %+v", res.Source)
 	}
 }
 
-func TestBuiltinRoundTrips(t *testing.T) {
-	tests := []struct {
-		name      string
-		evaluator string
-		input     string
-		output    string
-		expected  string
-		resName   string
-		wantValue Scalar
-	}{
-		{
-			name:      "Equals positional match",
-			evaluator: "Equals: hello",
-			output:    "hello",
-			resName:   "Equals",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "Equals positional mismatch",
-			evaluator: "Equals: hello",
-			output:    "world",
-			resName:   "Equals",
-			wantValue: Bool(false),
-		},
-		{
-			name:      "Equals kwargs",
-			evaluator: "Equals: {value: hello, evaluation_name: eq}",
-			output:    "hello",
-			resName:   "eq",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "EqualsExpected positional name",
-			evaluator: "EqualsExpected: ee",
-			output:    "x",
-			expected:  "x",
-			resName:   "ee",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "EqualsExpected kwargs",
-			evaluator: "EqualsExpected: {evaluation_name: ee2}",
-			output:    "x",
-			expected:  "x",
-			resName:   "ee2",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "Contains positional",
-			evaluator: "Contains: ell",
-			output:    "hello",
-			resName:   "Contains",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "Contains kwargs",
-			evaluator: "Contains: {value: ELL, case_sensitive: false, evaluation_name: ct}",
-			output:    "hello",
-			resName:   "ct",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "IsInstance positional",
-			evaluator: "IsInstance: string",
-			output:    "x",
-			resName:   "IsInstance",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "IsInstance kwargs",
-			evaluator: "IsInstance: {type_name: string, evaluation_name: ii}",
-			output:    "x",
-			resName:   "ii",
-			wantValue: Bool(true),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := newDefaultRegistry[string, string, map[string]any]()
-			var b strings.Builder
-			b.WriteString("name: ds\ncases:\n  - name: c1\n    inputs: in\n")
-			if tt.expected != "" {
-				b.WriteString("    expected_output: " + tt.expected + "\n")
-			}
-			b.WriteString("    evaluators:\n      - " + tt.evaluator + "\n")
-			ds, err := LoadDataset[string, string, map[string]any]([]byte(b.String()), reg, LoadOptions[string, string, map[string]any]{})
-			if err != nil {
-				t.Fatalf("LoadDataset: %v", err)
-			}
-			out := tt.output
-			rep, err := ds.Evaluate(context.Background(), func(_ context.Context, _ string) (string, error) {
-				return out, nil
-			})
-			if err != nil {
-				t.Fatalf("Evaluate: %v", err)
-			}
-			got := assertionValue(t, rep.Cases[0], tt.resName)
-			if got != tt.wantValue {
-				t.Fatalf("%s = %v want %v", tt.resName, got, tt.wantValue)
-			}
-		})
-	}
-}
-
-func TestMaxDurationRoundTrips(t *testing.T) {
-	tests := []struct {
-		name      string
-		evaluator string
-		wantValue Scalar
-	}{
-		{
-			name:      "positional generous",
-			evaluator: "MaxDuration: 3600",
-			wantValue: Bool(true),
-		},
-		{
-			name:      "positional impossible",
-			evaluator: "MaxDuration: 0",
-			wantValue: Bool(false),
-		},
-		{
-			name:      "kwargs seconds",
-			evaluator: "MaxDuration:\n          seconds: 3600",
-			wantValue: Bool(true),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := newDefaultRegistry[string, string, map[string]any]()
-			data := []byte("name: ds\ncases:\n  - name: c1\n    inputs: in\n    evaluators:\n      - " + tt.evaluator + "\n")
-			ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-			if err != nil {
-				t.Fatalf("LoadDataset: %v", err)
-			}
-			rep, err := ds.Evaluate(context.Background(), func(_ context.Context, _ string) (string, error) {
-				time.Sleep(time.Millisecond)
-				return "x", nil
-			})
-			if err != nil {
-				t.Fatalf("Evaluate: %v", err)
-			}
-			got := assertionValue(t, rep.Cases[0], "MaxDuration")
-			if got != tt.wantValue {
-				t.Fatalf("MaxDuration = %v want %v", got, tt.wantValue)
-			}
-		})
-	}
-}
-
-func TestFactoryInstantiateErrors(t *testing.T) {
-	tests := []struct {
-		name      string
-		evaluator string
-		wantSub   string
-	}{
-		{
-			name:      "IsInstance no type_name",
-			evaluator: "IsInstance: {evaluation_name: x}",
-			wantSub:   "IsInstance requires a type_name",
-		},
-		{
-			name:      "IsInstance type_name not a string",
-			evaluator: "IsInstance: 42",
-			wantSub:   "IsInstance type_name must be a string",
-		},
-		{
-			name:      "MaxDuration no seconds",
-			evaluator: "MaxDuration: {other: 1}",
-			wantSub:   "MaxDuration requires seconds",
-		},
-		{
-			name:      "MaxDuration non-numeric seconds",
-			evaluator: "MaxDuration: abc",
-			wantSub:   "MaxDuration seconds: expected a number",
-		},
-		{
-			name:      "MaxDuration kwargs non-numeric seconds",
-			evaluator: "MaxDuration: {seconds: abc}",
-			wantSub:   "MaxDuration seconds: expected a number",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := newDefaultRegistry[string, string, map[string]any]()
-			data := []byte("name: ds\ncases:\n  - name: c1\n    inputs: in\n    evaluators:\n      - " + tt.evaluator + "\n")
-			_, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-			if err == nil {
-				t.Fatalf("expected error for %q", tt.evaluator)
-			}
-			if !strings.Contains(err.Error(), tt.wantSub) {
-				t.Fatalf("error = %q want substring %q", err.Error(), tt.wantSub)
-			}
-			if !strings.Contains(err.Error(), "failed to instantiate evaluator") {
-				t.Fatalf("error = %q missing instantiate prefix", err.Error())
-			}
-			if !strings.Contains(err.Error(), `for case "c1"`) {
-				t.Fatalf("error = %q missing case context", err.Error())
-			}
-		})
-	}
-}
-
-type structIn struct {
-	City string `json:"city"`
-}
-
-type structOut struct {
-	Answer string `json:"answer"`
-	Score  int    `json:"score"`
-}
-
-type structMeta struct {
-	Difficulty string `json:"difficulty"`
-}
-
-func TestLoadDatasetStructDefaultDecoder(t *testing.T) {
-	cases := map[string][]byte{
-		"yaml": []byte(`name: structds
-cases:
-  - name: c1
-    inputs:
-      city: Paris
-    metadata:
-      difficulty: easy
-    expected_output:
-      answer: Paris
-      score: 10
-    evaluators:
-      - EqualsExpected
-`),
-		"json": []byte(`{"name":"structds","cases":[{"name":"c1","inputs":{"city":"Paris"},"metadata":{"difficulty":"easy"},"expected_output":{"answer":"Paris","score":10},"evaluators":["EqualsExpected"]}]}`),
-	}
-	for format, data := range cases {
-		t.Run(format, func(t *testing.T) {
-			reg := newDefaultRegistry[structIn, structOut, structMeta]()
-			ds, err := LoadDataset[structIn, structOut, structMeta](data, reg, LoadOptions[structIn, structOut, structMeta]{})
-			if err != nil {
-				t.Fatalf("LoadDataset: %v", err)
-			}
-			c := ds.Cases[0]
-			if c.Inputs != (structIn{City: "Paris"}) {
-				t.Fatalf("inputs = %#v", c.Inputs)
-			}
-			if !c.HasMetadata || c.Metadata != (structMeta{Difficulty: "easy"}) {
-				t.Fatalf("metadata = %#v has=%v", c.Metadata, c.HasMetadata)
-			}
-			if !c.HasExpectedOutput || c.ExpectedOutput != (structOut{Answer: "Paris", Score: 10}) {
-				t.Fatalf("expected = %#v has=%v", c.ExpectedOutput, c.HasExpectedOutput)
-			}
-
-			rep, err := ds.Evaluate(context.Background(), func(_ context.Context, in structIn) (structOut, error) {
-				return structOut{Answer: in.City, Score: 10}, nil
-			})
-			if err != nil {
-				t.Fatalf("Evaluate: %v", err)
-			}
-			got := assertionValue(t, rep.Cases[0], "EqualsExpected")
-			if got != Bool(true) {
-				t.Fatalf("EqualsExpected = %v want True", got)
-			}
-		})
-	}
-}
-
-func TestLoadDatasetCustomDecodeHooks(t *testing.T) {
-	reg := newDefaultRegistry[structIn, structOut, structMeta]()
-	data := []byte(`name: ds
-cases:
-  - name: c1
-    inputs:
-      raw: paris
-    metadata:
-      raw: easy
-    expected_output:
-      raw: PARIS
-`)
-	opts := LoadOptions[structIn, structOut, structMeta]{
-		DecodeInputs: func(v any) (structIn, error) {
-			m := v.(map[string]any)
-			return structIn{City: m["raw"].(string)}, nil
-		},
-		DecodeMetadata: func(v any) (structMeta, error) {
-			m := v.(map[string]any)
-			return structMeta{Difficulty: m["raw"].(string)}, nil
-		},
-		DecodeOutput: func(v any) (structOut, error) {
-			m := v.(map[string]any)
-			return structOut{Answer: m["raw"].(string)}, nil
-		},
-	}
-	ds, err := LoadDataset[structIn, structOut, structMeta](data, reg, opts)
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
-	c := ds.Cases[0]
-	if c.Inputs != (structIn{City: "paris"}) {
-		t.Fatalf("inputs = %#v", c.Inputs)
-	}
-	if c.Metadata != (structMeta{Difficulty: "easy"}) {
-		t.Fatalf("metadata = %#v", c.Metadata)
-	}
-	if c.ExpectedOutput != (structOut{Answer: "PARIS"}) {
-		t.Fatalf("expected = %#v", c.ExpectedOutput)
-	}
-}
-
-func TestLoadDatasetDecodeHookError(t *testing.T) {
-	reg := newDefaultRegistry[structIn, structOut, structMeta]()
-	tests := []struct {
-		name string
-		opts LoadOptions[structIn, structOut, structMeta]
-		data string
-		sub  string
-	}{
-		{
-			name: "inputs",
-			data: "name: ds\ncases:\n  - name: c1\n    inputs: x\n",
-			opts: LoadOptions[structIn, structOut, structMeta]{
-				DecodeInputs: func(any) (structIn, error) { return structIn{}, errBoom },
-			},
-			sub: `case "c1" inputs:`,
-		},
-		{
-			name: "metadata",
-			data: "name: ds\ncases:\n  - name: c1\n    inputs: x\n    metadata: y\n",
-			opts: LoadOptions[structIn, structOut, structMeta]{
-				DecodeInputs:   func(any) (structIn, error) { return structIn{}, nil },
-				DecodeMetadata: func(any) (structMeta, error) { return structMeta{}, errBoom },
-			},
-			sub: `case "c1" metadata:`,
-		},
-		{
-			name: "expected_output",
-			data: "name: ds\ncases:\n  - name: c1\n    inputs: x\n    expected_output: y\n",
-			opts: LoadOptions[structIn, structOut, structMeta]{
-				DecodeInputs: func(any) (structIn, error) { return structIn{}, nil },
-				DecodeOutput: func(any) (structOut, error) { return structOut{}, errBoom },
-			},
-			sub: `case "c1" expected_output:`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := LoadDataset[structIn, structOut, structMeta]([]byte(tt.data), reg, tt.opts)
-			if err == nil {
-				t.Fatal("expected decode error")
-			}
-			if !strings.Contains(err.Error(), tt.sub) {
-				t.Fatalf("error = %q want substring %q", err.Error(), tt.sub)
-			}
-		})
-	}
-}
-
-func TestLoadDatasetMetadataAndExpectedAbsent(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	data := []byte(`name: ds
-cases:
-  - name: c1
-    inputs: in1
-`)
-	ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{})
-	if err != nil {
-		t.Fatalf("LoadDataset: %v", err)
-	}
-	c := ds.Cases[0]
-	if c.HasMetadata {
-		t.Fatal("expected no metadata")
-	}
-	if c.HasExpectedOutput {
-		t.Fatal("expected no expected_output")
-	}
-}
-
-func TestSaveLoadRoundTripAllBuiltins(t *testing.T) {
-	reg := newDefaultRegistry[string, string, map[string]any]()
-	d, err := NewDataset[string, string, map[string]any]("rt", []Case[string, string, map[string]any]{
-		NewCase[string, string, map[string]any]("hello",
-			WithCaseName[string, string, map[string]any]("c1"),
-			WithExpectedOutput[string, string, map[string]any]("hello"),
-			WithCaseEvaluators[string, string, map[string]any](
-				Equals[string, string, map[string]any]{Value: "hello"},
-				EqualsExpected[string, string, map[string]any]{},
-				Contains[string, string, map[string]any]{Value: "ell"},
-				IsInstance[string, string, map[string]any]{TypeName: "string"},
-				MaxDuration[string, string, map[string]any]{Max: time.Hour},
-			),
-		),
+// Register overrides an existing factory for the same name.
+func TestRegisterOverride(t *testing.T) {
+	reg := NewRegistry[string, string, string]()
+	reg.RegisterDefaults()
+	reg.Register("Equals", func(spec EvaluatorSpec) (Evaluator[string, string, string], error) {
+		return EqualsExpected[string, string, string]{Name: "overridden"}, nil
 	})
+	ds, err := LoadDataset(
+		[]byte("name: d\ncases:\n  - inputs: x\nevaluators:\n  - Equals: ignored\n"),
+		reg,
+		LoadOptions[string, string, string]{},
+	)
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+	if e, ok := ds.Evaluators[0].(EqualsExpected[string, string, string]); !ok || e.Name != "overridden" {
+		t.Fatalf("override not applied: %T %+v", ds.Evaluators[0], ds.Evaluators[0])
+	}
+}
+
+// --- full round trips: Save -> LoadDataset -> Evaluate -----------------------
+
+func TestRoundTripBuiltins(t *testing.T) {
+	src, err := NewDataset(
+		"rt",
+		[]Case[string, string, string]{
+			NewCase[string, string, string](
+				"in",
+				WithCaseName[string, string, string]("c1"),
+				WithExpectedOutput[string, string, string]("hello"),
+			),
+		},
+		Equals[string, string, string]{Value: "hello"},             // positional kwargs spec
+		EqualsExpected[string, string, string]{},                   // bare name
+		Contains[string, string, string]{Value: "ell"},             // kwargs spec
+		IsInstance[string, string, string]{TypeName: "string"},     // single positional arg spec
+		MaxDuration[string, string, string]{Max: 10 * time.Second}, // single positional arg spec
+	)
 	if err != nil {
 		t.Fatalf("NewDataset: %v", err)
 	}
 
 	for _, format := range []string{"yaml", "json"} {
 		t.Run(format, func(t *testing.T) {
-			data, err := d.Save(SaveOptions{Format: format})
+			data, err := src.Save(SaveOptions{Format: format})
 			if err != nil {
 				t.Fatalf("Save: %v", err)
 			}
-			ds, err := LoadDataset[string, string, map[string]any](data, reg, LoadOptions[string, string, map[string]any]{Format: format})
+			reg := NewRegistry[string, string, string]()
+			reg.RegisterDefaults()
+			ds, err := LoadDataset(data, reg, LoadOptions[string, string, string]{Format: format})
 			if err != nil {
 				t.Fatalf("LoadDataset: %v", err)
 			}
 			rep, err := ds.Evaluate(context.Background(), func(_ context.Context, in string) (string, error) {
-				return in, nil
+				return "hello", nil
 			})
 			if err != nil {
 				t.Fatalf("Evaluate: %v", err)
 			}
-			rc := rep.Cases[0]
-			for _, n := range []string{"Equals", "EqualsExpected", "Contains", "IsInstance", "MaxDuration"} {
-				if v := assertionValue(t, rc, n); v != Bool(true) {
-					t.Fatalf("%s = %v want True", n, v)
+			c := rep.Cases[0]
+			want := map[string]bool{
+				"Equals": true, "EqualsExpected": true, "Contains": true,
+				"IsInstance": true, "MaxDuration": true,
+			}
+			for name := range want {
+				res, ok := c.Assertions[name]
+				if !ok {
+					t.Fatalf("missing assertion %q in %v", name, c.Assertions)
 				}
+				if res.Value != Bool(true) {
+					t.Fatalf("assertion %q = %v, want True", name, res.Value)
+				}
+			}
+			if len(c.Assertions) != len(want) {
+				t.Fatalf("unexpected assertions: %+v", c.Assertions)
+			}
+			if c.ExpectedOutput != "hello" || !c.HasExpectedOutput {
+				t.Fatalf("expected_output not round-tripped: %+v", c)
 			}
 		})
 	}
 }
 
-// --- helpers ---
+// --- struct I/O/M with custom Decode hooks -----------------------------------
 
-var errBoom = errBoomError("boom")
-
-type errBoomError string
-
-func (e errBoomError) Error() string { return string(e) }
-
-func assertionValue[I, O, M any](t *testing.T, rc ReportCase[I, O, M], name string) Scalar {
-	t.Helper()
-	r, ok := rc.Assertions[name]
-	if !ok {
-		t.Fatalf("assertion %q not found in %#v", name, rc.Assertions)
-	}
-	return r.Value
+type box struct {
+	V string
 }
 
-func equalAny(a, b any) bool {
-	switch av := a.(type) {
-	case []any:
-		bv, ok := b.([]any)
-		if !ok || len(av) != len(bv) {
-			return false
-		}
-		for i := range av {
-			if !equalAny(av[i], bv[i]) {
-				return false
+func TestLoadDecodeHooks(t *testing.T) {
+	data := []byte("name: d\ncases:\n  - inputs: raw\n    expected_output: exp\n    metadata: md\n")
+	reg := NewRegistry[box, box, box]()
+	reg.RegisterDefaults()
+	ds, err := LoadDataset(data, reg, LoadOptions[box, box, box]{
+		DecodeInputs:   func(v any) (box, error) { return box{V: "I:" + v.(string)}, nil },
+		DecodeOutput:   func(v any) (box, error) { return box{V: "O:" + v.(string)}, nil },
+		DecodeMetadata: func(v any) (box, error) { return box{V: "M:" + v.(string)}, nil },
+	})
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+	c := ds.Cases[0]
+	if c.Inputs.V != "I:raw" || c.ExpectedOutput.V != "O:exp" || c.Metadata.V != "M:md" {
+		t.Fatalf("decode hooks not applied: %+v", c)
+	}
+	if !c.HasExpectedOutput || !c.HasMetadata {
+		t.Fatalf("Has* flags not set: %+v", c)
+	}
+}
+
+func TestLoadDecodeHookErrors(t *testing.T) {
+	reg := NewRegistry[box, box, box]()
+	reg.RegisterDefaults()
+
+	boom := func(any) (box, error) { return box{}, errBoom }
+	ok := func(v any) (box, error) { return box{V: v.(string)}, nil }
+
+	tests := []struct {
+		name string
+		data string
+		opts LoadOptions[box, box, box]
+		want string
+	}{
+		{
+			name: "inputs",
+			data: "name: d\ncases:\n  - name: c1\n    inputs: raw\n",
+			opts: LoadOptions[box, box, box]{DecodeInputs: boom},
+			want: `case "c1" inputs: boom`,
+		},
+		{
+			name: "metadata",
+			data: "name: d\ncases:\n  - name: c1\n    inputs: raw\n    metadata: md\n",
+			opts: LoadOptions[box, box, box]{DecodeInputs: ok, DecodeMetadata: boom},
+			want: `case "c1" metadata: boom`,
+		},
+		{
+			name: "expected_output",
+			data: "name: d\ncases:\n  - name: c1\n    inputs: raw\n    expected_output: exp\n",
+			opts: LoadOptions[box, box, box]{DecodeInputs: ok, DecodeOutput: boom},
+			want: `case "c1" expected_output: boom`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadDataset([]byte(tt.data), reg, tt.opts)
+			if err == nil {
+				t.Fatal("expected error")
 			}
-		}
-		return true
-	default:
-		return a == b
+			assertContains(t, err.Error(), tt.want)
+		})
 	}
 }
 
-type specEvaluator struct {
-	spec EvaluatorSpec
+var errBoom = errBoomType{}
+
+type errBoomType struct{}
+
+func (errBoomType) Error() string { return "boom" }
+
+// --- default JSON-roundtrip decoder for struct types with nested YAML maps ---
+
+type person struct {
+	Name string         `json:"name"`
+	Tags map[string]int `json:"tags"`
 }
 
-func (s specEvaluator) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, map[string]any]) (EvaluatorOutput, error) {
-	return ScalarValue(Bool(true)), nil
+func TestLoadDefaultDecoderStructNestedMaps(t *testing.T) {
+	data := []byte(`name: people
+cases:
+  - name: alice
+    inputs:
+      name: Alice
+      tags:
+        a: 1
+        b: 2
+    expected_output:
+      name: ALICE
+      tags:
+        x: 9
+    metadata:
+      name: meta
+      tags:
+        m: 5
+    evaluators:
+      - EqualsExpected
+`)
+	reg := NewRegistry[person, person, person]()
+	reg.RegisterDefaults()
+	ds, err := LoadDataset(data, reg, LoadOptions[person, person, person]{})
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+	c := ds.Cases[0]
+	wantIn := person{Name: "Alice", Tags: map[string]int{"a": 1, "b": 2}}
+	if c.Inputs.Name != wantIn.Name || c.Inputs.Tags["a"] != 1 || c.Inputs.Tags["b"] != 2 {
+		t.Fatalf("inputs = %+v, want %+v", c.Inputs, wantIn)
+	}
+	if c.ExpectedOutput.Name != "ALICE" || c.ExpectedOutput.Tags["x"] != 9 {
+		t.Fatalf("expected_output = %+v", c.ExpectedOutput)
+	}
+	if c.Metadata.Name != "meta" || c.Metadata.Tags["m"] != 5 {
+		t.Fatalf("metadata = %+v", c.Metadata)
+	}
 }
 
-func (s specEvaluator) Spec() EvaluatorSpec { return s.spec }
+// --- default JSON-roundtrip decoder fast path: value already of target type --
 
-type startsWith struct {
-	prefix string
+func TestLoadDefaultDecoderAnyFastPath(t *testing.T) {
+	reg := NewRegistry[any, any, any]()
+	reg.RegisterDefaults()
+	ds, err := LoadDataset(
+		[]byte("name: d\ncases:\n  - inputs: 5\n    expected_output: hi\n    metadata: true\n"),
+		reg,
+		LoadOptions[any, any, any]{},
+	)
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+	c := ds.Cases[0]
+	if c.Inputs != 5 {
+		t.Fatalf("inputs = %#v, want int 5", c.Inputs)
+	}
+	if c.ExpectedOutput != "hi" || !c.HasExpectedOutput {
+		t.Fatalf("expected_output = %#v has=%v", c.ExpectedOutput, c.HasExpectedOutput)
+	}
+	if c.Metadata != true || !c.HasMetadata {
+		t.Fatalf("metadata = %#v has=%v", c.Metadata, c.HasMetadata)
+	}
 }
 
-func (s startsWith) Evaluate(_ context.Context, ec *EvaluatorContext[string, string, map[string]any]) (EvaluatorOutput, error) {
-	return ScalarValue(Bool(strings.HasPrefix(ec.Output, s.prefix))), nil
-}
+// --- cases with and without metadata / expected_output -----------------------
 
-func (s startsWith) Spec() EvaluatorSpec { return NewSpecArg("StartsWith", s.prefix) }
+func TestSaveCasesWithAndWithoutOptionalFields(t *testing.T) {
+	ds, err := NewDataset[string, string, string](
+		"d",
+		[]Case[string, string, string]{
+			NewCase[string, string, string](
+				"with",
+				WithCaseName[string, string, string]("full"),
+				WithMetadata[string, string, string]("md"),
+				WithExpectedOutput[string, string, string]("eo"),
+			),
+			NewCase[string, string, string](
+				"without",
+				WithCaseName[string, string, string]("bare"),
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewDataset: %v", err)
+	}
+	const want = `name: d
+cases:
+  - name: full
+    inputs: with
+    metadata: md
+    expected_output: eo
+  - name: bare
+    inputs: without
+`
+	if got := mustSave(t, ds, SaveOptions{}); got != want {
+		t.Fatalf("optional fields YAML mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+
+	// And the round trip preserves the Has* flags.
+	reg := NewRegistry[string, string, string]()
+	reg.RegisterDefaults()
+	loaded, err := LoadDataset([]byte(want), reg, LoadOptions[string, string, string]{})
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+	if !loaded.Cases[0].HasMetadata || !loaded.Cases[0].HasExpectedOutput {
+		t.Fatalf("full case lost Has* flags: %+v", loaded.Cases[0])
+	}
+	if loaded.Cases[1].HasMetadata || loaded.Cases[1].HasExpectedOutput {
+		t.Fatalf("bare case gained Has* flags: %+v", loaded.Cases[1])
+	}
+}

@@ -1,371 +1,198 @@
-package evals
+package evals_test
 
 import (
 	"context"
 	"strings"
 	"testing"
-	"time"
+
+	evals "github.com/pydantic/pydantic-evals-go"
 )
 
-// covScalarToFloatBranches drives the Float, Bool(true/false) and default arms of
-// scalarToFloat via Averages, which calls it on every score value. Scores
-// produced by real evaluators are only Int/Float, so the Bool and Label arms are
-// reached by constructing ReportCases (whose fields are exported) directly.
-func TestCovScalarToFloatBranchesViaAverages(t *testing.T) {
-	report := &EvaluationReport[int, int, int]{
-		Name: "cov",
-		Cases: []ReportCase[int, int, int]{
+// TestCovSuiteContains exercises Suite.Contains, the type-bound builder facade
+// for the Contains evaluator, and runs the built evaluator end-to-end.
+func TestCovSuiteContains(t *testing.T) {
+	s := evals.For[string, string, any]()
+	ev := s.Contains("ell")
+	if ev.Value != "ell" {
+		t.Fatalf("Contains value = %v, want %q", ev.Value, "ell")
+	}
+	ds, err := evals.NewDataset[string, string, any](
+		"d",
+		[]evals.Case[string, string, any]{s.Case("hello").Name("c1").Build()},
+		ev,
+	)
+	if err != nil {
+		t.Fatalf("NewDataset: %v", err)
+	}
+	report, err := ds.Evaluate(context.Background(), ltEchoTask)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	res, ok := report.Cases[0].Assertions["Contains"]
+	if !ok {
+		t.Fatalf("missing Contains assertion: %v", keysOf(report.Cases[0].Assertions))
+	}
+	if v, ok := res.Value.(evals.Bool); !ok || !bool(v) {
+		t.Fatalf("Contains result = %#v, want Bool(true)", res.Value)
+	}
+}
+
+// covPtrEvaluator has its Evaluate method on a pointer receiver so that, when
+// used as &covPtrEvaluator{}, evaluatorTypeName must dereference the pointer to
+// recover the underlying type name.
+type covPtrEvaluator struct{}
+
+func (e *covPtrEvaluator) Evaluate(_ context.Context, _ *evals.EvaluatorContext[string, string, any]) (evals.Output, error) {
+	return evals.Assertion(true), nil
+}
+
+func TestCovEvaluatorTypeNamePointer(t *testing.T) {
+	s := evals.For[string, string, any]()
+	ds, err := evals.NewDataset[string, string, any](
+		"d",
+		[]evals.Case[string, string, any]{s.Case("hi").Name("c1").Build()},
+		&covPtrEvaluator{},
+	)
+	if err != nil {
+		t.Fatalf("NewDataset: %v", err)
+	}
+	report, err := ds.Evaluate(context.Background(), ltEchoTask)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	got := report.Cases[0].Assertions
+	if _, ok := got["covPtrEvaluator"]; !ok {
+		t.Fatalf("expected assertion keyed by dereferenced type name, got %v", keysOf(got))
+	}
+}
+
+// TestCovSprintValueMap renders an Output that is a map[string]any so the
+// sorted-key map branch of sprintValue is exercised.
+func TestCovSprintValueMap(t *testing.T) {
+	rep := &evals.EvaluationReport[any, any, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[any, any, any]{
 			{
-				Name: "c1",
-				Scores: map[string]EvaluationResult{
-					"f":     {Name: "f", Value: Float(2.5)},
-					"i":     {Name: "i", Value: Int(4)},
-					"btrue": {Name: "btrue", Value: Bool(true)},
-					"bfals": {Name: "bfals", Value: Bool(false)},
-					"lab":   {Name: "lab", Value: Label("x")},
-				},
+				Name:   "c1",
+				Inputs: "in",
+				Output: map[string]any{"b": 2, "a": 1},
 			},
 		},
 	}
-
-	avg := report.Averages()
-	if avg == nil {
-		t.Fatal("expected averages")
-	}
-	want := map[string]float64{"f": 2.5, "i": 4, "btrue": 1, "bfals": 0, "lab": 0}
-	for k, v := range want {
-		if got := avg.Scores[k]; got != v {
-			t.Fatalf("score %q = %v, want %v", k, got, v)
-		}
+	got := rep.Render(evals.RenderOptions{IncludeOutput: true})
+	if !strings.Contains(got, "{a: 1, b: 2}") {
+		t.Fatalf("expected sorted map rendering, got:\n%s", got)
 	}
 }
 
-// covAggregateRowNilAssertions reaches the aggregateRow branch where an aggregate
-// has no assertions: a single case with a score but no assertions renders an
-// "Averages" row whose assertions cell is empty.
-func TestCovAggregateRowNilAssertions(t *testing.T) {
-	report := &EvaluationReport[int, int, int]{
-		Name: "agg",
-		Cases: []ReportCase[int, int, int]{
-			{Name: "c1", Scores: map[string]EvaluationResult{"s": {Name: "s", Value: Int(1)}}},
-			{Name: "c2", Scores: map[string]EvaluationResult{"s": {Name: "s", Value: Int(3)}}},
+// TestCovSprintValueDefault renders an Output whose Go type is neither string,
+// nil, Scalar, nor map[string]any, hitting the default fmt arm of sprintValue.
+func TestCovSprintValueDefault(t *testing.T) {
+	rep := &evals.EvaluationReport[any, any, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[any, any, any]{
+			{Name: "c1", Inputs: "in", Output: 42},
 		},
 	}
-	out := report.Render(RenderOptions{IncludeAverages: true})
-	if !strings.Contains(out, "Averages") {
-		t.Fatalf("expected Averages row, got:\n%s", out)
-	}
-	if strings.Contains(out, "✔") {
-		t.Fatalf("did not expect an assertion mark, got:\n%s", out)
+	got := rep.Render(evals.RenderOptions{IncludeOutput: true})
+	if !strings.Contains(got, "42") {
+		t.Fatalf("expected fmt rendering of int output, got:\n%s", got)
 	}
 }
 
-// covPadGapNegative reaches pad's gap<0 branch: a right-aligned duration cell
-// whose content is wider than the header width forces a negative gap on the
-// header pad of that column.
-func TestCovPadGapNegative(t *testing.T) {
-	report := &EvaluationReport[int, int, int]{
-		Name: "pad",
-		Cases: []ReportCase[int, int, int]{
-			{Name: "only", TaskDuration: 1500 * time.Millisecond},
-		},
+// TestCovScalarToFloatBool builds a report whose Scores map carries a Bool value
+// directly (legal via the exported EvaluationResult.Value field) so that the Bool
+// arm of scalarToFloat is reached through Averages.
+func TestCovScalarToFloatBool(t *testing.T) {
+	cases := []struct {
+		name string
+		val  evals.Scalar
+		want float64
+	}{
+		{"true", evals.Bool(true), 1},
+		{"false", evals.Bool(false), 0},
+		{"label", evals.Label("x"), 0},
 	}
-	out := report.Render(RenderOptions{IncludeDurations: true})
-	if !strings.Contains(out, "1.5s") {
-		t.Fatalf("expected duration cell, got:\n%s", out)
-	}
-}
-
-// covRenderDurationMicrosecondsPrecisionZero reaches the µs branch of
-// renderDuration where the value rounds to >=1 and precision drops to 0.
-func TestCovRenderDurationMicrosecondsPrecisionZero(t *testing.T) {
-	report := &EvaluationReport[int, int, int]{
-		Name: "us",
-		Cases: []ReportCase[int, int, int]{
-			{Name: "fast", TaskDuration: 5 * time.Microsecond},
-		},
-	}
-	out := report.Render(RenderOptions{IncludeDurations: true})
-	if !strings.Contains(out, "5µs") {
-		t.Fatalf("expected 5µs, got:\n%s", out)
-	}
-}
-
-// covAveragePresentKeysSkipMissing reaches averagePresentKeys via a multi-run
-// experiment where one group's summary lacks a key another has, plus an
-// aggregate whose Assertions is nil (covering the nil arm of averageAggregates).
-func TestCovAveragePresentKeysAndAggregateNilAssertions(t *testing.T) {
-	d := mustDataset(t, "multi",
-		NewCase[string, string, string]("a", WithCaseName[string, string, string]("a")),
-		NewCase[string, string, string]("b", WithCaseName[string, string, string]("b")),
-	)
-	// Per-case evaluator that emits a score only for case "a", so the two
-	// groups' summaries have different score keys.
-	d.AddEvaluator(condScore{})
-
-	report, err := d.Evaluate(context.Background(), echoTask, WithRepeat[string, string, string](2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	avg := report.Averages()
-	if avg == nil {
-		t.Fatal("expected averages")
-	}
-	if _, ok := avg.Scores["only_a"]; !ok {
-		t.Fatalf("expected only_a score in averages: %#v", avg.Scores)
-	}
-	if avg.Assertions != nil {
-		t.Fatalf("expected nil assertions, got %v", *avg.Assertions)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := &evals.EvaluationReport[string, string, any]{
+				Name: "task",
+				Cases: []evals.ReportCase[string, string, any]{
+					{
+						Name: "c1",
+						Scores: map[string]evals.EvaluationResult{
+							"sc": {Name: "sc", Value: tc.val},
+						},
+					},
+				},
+			}
+			avg := rep.Averages()
+			if avg == nil {
+				t.Fatal("Averages returned nil")
+			}
+			if got := avg.Scores["sc"]; got != tc.want {
+				t.Fatalf("avg score = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
-type condScore struct{}
-
-func (condScore) Evaluate(_ context.Context, ec *EvaluatorContext[string, string, string]) (EvaluatorOutput, error) {
-	if ec.Inputs == "a" {
-		return ScalarValue(Float(1.0)), nil
-	}
-	return ScalarMapOutput{}, nil
-}
-
-func (condScore) Spec() EvaluatorSpec { return NewSpec("condScore") }
-
-func (condScore) DefaultEvaluationName() string { return "only_a" }
-
-// covCaseGroupsFailureOnlyGroup reaches the CaseGroups branch where a group has
-// only failures (len(runs)==0), so identity is pulled from the first failure.
-func TestCovCaseGroupsFailureOnlyGroup(t *testing.T) {
-	d := mustDataset(t, "fails",
-		NewCase[string, string, string]("boom", WithCaseName[string, string, string]("boom")),
-	)
-	report, err := d.Evaluate(context.Background(), failTask, WithRepeat[string, string, string](2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	groups := report.CaseGroups()
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 group, got %d", len(groups))
-	}
-	g := groups[0]
-	if len(g.Runs) != 0 {
-		t.Fatalf("expected only failures, got %d runs", len(g.Runs))
-	}
-	if g.Name != "boom" {
-		t.Fatalf("group name = %q", g.Name)
-	}
-	if g.Inputs != "boom" {
-		t.Fatalf("expected inputs from first failure, got %q", g.Inputs)
-	}
-}
-
-func failTask(_ context.Context, _ string) (string, error) {
-	return "", errCov("kaboom")
-}
-
-type errCov string
-
-func (e errCov) Error() string { return string(e) }
-
-// covErrorTypeNilAndAnonymous covers errorType's nil and unnamed-type arms via a
-// failing task whose error has a named type, plus the report cell rendering that
-// uses it.
-func TestCovErrorTypePopulatesFailure(t *testing.T) {
-	d := mustDataset(t, "errtype",
-		NewCase[string, string, string]("x"),
-	)
-	report, err := d.Evaluate(context.Background(), failTask, WithName[string, string, string]("errtype"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Failures) != 1 {
-		t.Fatalf("expected 1 failure, got %d", len(report.Failures))
-	}
-	if report.Failures[0].ErrorType != "errCov" {
-		t.Fatalf("ErrorType = %q, want errCov", report.Failures[0].ErrorType)
-	}
-}
-
-// covSprintValueMapBranch reaches sprintValue's map[string]any arm by rendering a
-// case whose inputs are a map, with deterministic sorted-key output.
-func TestCovSprintValueMapBranch(t *testing.T) {
-	report := &EvaluationReport[map[string]any, int, int]{
-		Name: "map",
-		Cases: []ReportCase[map[string]any, int, int]{
-			{Name: "c1", Inputs: map[string]any{"b": 2, "a": 1}},
-		},
-	}
-	out := report.Render(RenderOptions{IncludeInput: true})
-	if !strings.Contains(out, "{a: 1, b: 2}") {
-		t.Fatalf("expected sorted map rendering, got:\n%s", out)
-	}
-}
-
-// covToFloatReachableKinds drives toFloat's float64 (JSON), int (YAML) and error
-// arms through MaxDuration's registry factory, which calls toFloat on the seconds
-// argument. JSON numbers deserialize as float64 and yaml.v3 integers as int;
-// float32/int64/json.Number cannot be produced by LoadDataset and are therefore
-// not reachable from the public API.
-func TestCovToFloatReachableKinds(t *testing.T) {
-	t.Run("float64ViaJSON", func(t *testing.T) {
-		reg := NewRegistry[string, string, string]()
-		reg.RegisterDefaults()
-		data := []byte(`{"name":"td","cases":[{"inputs":"x"}],"evaluators":[{"MaxDuration":{"seconds":1.5}}]}`)
-		ds, err := LoadDataset(data, reg, LoadOptions[string, string, string]{Format: "json"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := ds.Evaluators[0].(MaxDuration[string, string, string]).Max; got != 1500*time.Millisecond {
-			t.Fatalf("Max = %v", got)
-		}
-	})
-
-	t.Run("intViaYAML", func(t *testing.T) {
-		reg := NewRegistry[string, string, string]()
-		reg.RegisterDefaults()
-		data := []byte("name: td\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: 2\n")
-		ds, err := LoadDataset(data, reg, LoadOptions[string, string, string]{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := ds.Evaluators[0].(MaxDuration[string, string, string]).Max; got != 2*time.Second {
-			t.Fatalf("Max = %v", got)
-		}
-	})
-
-	t.Run("errorArm", func(t *testing.T) {
-		reg := NewRegistry[string, string, string]()
-		reg.RegisterDefaults()
-		data := []byte("name: td\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: not-a-number\n")
-		if _, err := LoadDataset(data, reg, LoadOptions[string, string, string]{}); err == nil {
-			t.Fatal("expected error from non-numeric seconds")
-		}
-	})
-}
-
-// TestCovAsStringKeyedMapViaSave round-trips a kwargs evaluator spec through YAML
-// to exercise the string-keyed-map kwargs path of spec parsing. normalizeYAML
-// converts yaml.v3's map[any]any to map[string]any before parsing, so the parser
-// only ever sees string-keyed maps.
-func TestCovAsStringKeyedMapViaSave(t *testing.T) {
-	// kwargs spec -> shortForm produces map[string]any{name: kwargs}; round-trip
-	// through YAML exercises the string-keyed kwargs branch.
-	d := mustDataset(t, "skm")
-	d.AddEvaluator(specEval{spec: NewSpecKwargs("Custom", map[string]any{"k": "v"})})
-
-	data, err := d.Save(SaveOptions{Format: "yaml"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reg := NewRegistry[string, string, string]()
-	reg.Register("Custom", func(spec EvaluatorSpec) (Evaluator[string, string, string], error) {
-		if spec.Kwargs["k"] != "v" {
-			t.Fatalf("expected kwargs k=v, got %#v", spec.Kwargs)
-		}
-		return specEval{spec: spec}, nil
-	})
-	if _, err := LoadDataset(data, reg, LoadOptions[string, string, string]{DefaultName: "skm"}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-type specEval struct{ spec EvaluatorSpec }
-
-func (s specEval) Evaluate(_ context.Context, _ *EvaluatorContext[string, string, string]) (EvaluatorOutput, error) {
-	return ScalarValue(Bool(true)), nil
-}
-
-func (s specEval) Spec() EvaluatorSpec { return s.spec }
-
-// covConvertViaError reaches convertVia's json.Unmarshal error arm: a non-nil
-// DecodeInputs is absent so convertVia is used, and a value that cannot decode
-// into the target type (a string into an int) triggers the unmarshal error.
-func TestCovConvertViaUnmarshalError(t *testing.T) {
-	reg := NewRegistry[int, int, int]()
-	yamlData := "name: cv\ncases:\n  - inputs: not-an-int\n"
-	_, err := LoadDataset([]byte(yamlData), reg, LoadOptions[int, int, int]{})
-	if err == nil {
-		t.Fatal("expected decode error")
-	}
-	if !strings.Contains(err.Error(), "inputs") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func mustDataset(t *testing.T, name string, cases ...Case[string, string, string]) *Dataset[string, string, string] {
-	t.Helper()
-	d, err := NewDataset(name, cases)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return d
-}
-
-func echoTask(_ context.Context, in string) (string, error) { return in, nil }
-
-// covSprintValueDefaultArm reaches sprintValue's default (non-map) arm by
-// rendering a case whose inputs are a plain slice.
-func TestCovSprintValueDefaultArm(t *testing.T) {
-	report := &EvaluationReport[[]int, int, int]{
-		Name: "slice",
-		Cases: []ReportCase[[]int, int, int]{
-			{Name: "c1", Inputs: []int{1, 2, 3}},
-		},
-	}
-	out := report.Render(RenderOptions{IncludeInput: true})
-	if !strings.Contains(out, "[1 2 3]") {
-		t.Fatalf("expected slice rendering, got:\n%s", out)
-	}
-}
-
-// covCaseGroupsEmptySourceFallsBackToName reaches the key=="" fall-back arms of
-// CaseGroups for both a case and a failure: one case carries a SourceCaseName
-// (so grouping is active) while another case and a failure leave it empty,
-// forcing the fall-back to Name.
-func TestCovCaseGroupsEmptySourceFallsBackToName(t *testing.T) {
-	report := &EvaluationReport[string, string, string]{
-		Name: "mixed",
-		Cases: []ReportCase[string, string, string]{
-			{Name: "grouped_1", SourceCaseName: "grouped"},
+// TestCovCaseGroupsEmptySourceName covers the key == "" fallbacks in CaseGroups
+// for both runs and failures: a multi-run report where some entries lack a
+// SourceCaseName and must fall back to their own Name.
+func TestCovCaseGroupsEmptySourceName(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{Name: "sourced", SourceCaseName: "grp"},
 			{Name: "lonely"},
 		},
-		Failures: []ReportCaseFailure[string, string, string]{
-			{Name: "failed"},
+		Failures: []evals.ReportCaseFailure[string, string, any]{
+			{Name: "failsourced", SourceCaseName: "grp"},
+			{Name: "faillonely"},
 		},
 	}
-	groups := report.CaseGroups()
-	names := map[string]bool{}
+	groups := rep.CaseGroups()
+	names := make(map[string]bool, len(groups))
 	for _, g := range groups {
 		names[g.Name] = true
 	}
-	for _, want := range []string{"grouped", "lonely", "failed"} {
+	for _, want := range []string{"grp", "lonely", "faillonely"} {
 		if !names[want] {
 			t.Fatalf("missing group %q in %v", want, names)
 		}
 	}
 }
 
-// covRenderDurationZero reaches renderDuration's seconds==0 "0s" arm via a case
-// whose task duration is zero.
-func TestCovRenderDurationZero(t *testing.T) {
-	report := &EvaluationReport[int, int, int]{
-		Name:  "zero",
-		Cases: []ReportCase[int, int, int]{{Name: "c1", TaskDuration: 0}},
+// TestCovNormalizeYAMLNonStringKeys loads a YAML dataset whose inputs are a
+// nested mapping with a non-string key and a sequence, forcing normalizeYAML to
+// walk its map[any]any and []any branches.
+func TestCovNormalizeYAMLNonStringKeys(t *testing.T) {
+	const data = "name: d\ncases:\n  - inputs:\n      1: x\n      list: [a, b]\n"
+	reg := evals.NewRegistry[string, string, string]()
+	reg.RegisterDefaults()
+	var captured any
+	ds, err := evals.LoadDataset([]byte(data), reg, evals.LoadOptions[string, string, string]{
+		DecodeInputs: func(v any) (string, error) {
+			captured = v
+			return "ok", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
 	}
-	out := report.Render(RenderOptions{IncludeDurations: true})
-	if !strings.Contains(out, "0s") {
-		t.Fatalf("expected 0s, got:\n%s", out)
+	if len(ds.Cases) != 1 {
+		t.Fatalf("expected 1 case, got %d", len(ds.Cases))
 	}
-}
-
-// TestCovSaveYAMLEncodeError reaches Save's YAML encode-error arm with an input
-// value the YAML encoder cannot marshal.
-func TestCovSaveYAMLEncodeError(t *testing.T) {
-	d := &Dataset[any, any, any]{
-		Name:  "ds",
-		Cases: []Case[any, any, any]{{Name: "c1", Inputs: make(chan int)}},
+	m, ok := captured.(map[string]any)
+	if !ok {
+		t.Fatalf("normalized inputs not map[string]any: %#v", captured)
 	}
-	if _, err := d.Save(SaveOptions{Format: "yaml"}); err == nil {
-		t.Fatal("expected a YAML encode error for an unsupported input type")
+	if m["1"] != "x" {
+		t.Fatalf("non-string key not normalized: %#v", m)
+	}
+	list, ok := m["list"].([]any)
+	if !ok || len(list) != 2 || list[0] != "a" || list[1] != "b" {
+		t.Fatalf("sequence not normalized: %#v", m["list"])
 	}
 }
