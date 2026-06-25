@@ -147,13 +147,37 @@ Datasets can be saved to and loaded from YAML or JSON with `Dataset.Save` and
 `LoadDataset`. Loading reconstructs evaluators through a `Registry`; call
 `RegisterDefaults` for the built-ins, or `Register` your own factories.
 
+### OpenTelemetry & Logfire
+
+`Evaluate` emits an OpenTelemetry span tree — an `evaluate <name>` experiment
+span, a `case: <name>` span per case, an `execute <task>` span per task run, and
+an `evaluator: <name>` span per evaluator — with the same attribute conventions
+(`gen_ai.operation.name=experiment`, per-case `scores`/`labels`/`assertions`/
+`metrics`/`output`, `assertion_pass_rate`) that [Pydantic Logfire](https://logfire.pydantic.dev)'s
+evaluation views read. Task and evaluator failures are recorded as span errors.
+
+Instrumentation uses the global OpenTelemetry tracer provider, so it costs
+nothing until you configure one. To send traces to Logfire, point an OTLP
+exporter at the Logfire endpoint and call `otel.SetTracerProvider`:
+
+```go
+exp, _ := otlptracehttp.New(ctx,
+    otlptracehttp.WithEndpointURL("https://logfire-us.pydantic.dev/v1/traces"),
+    otlptracehttp.WithHeaders(map[string]string{"Authorization": os.Getenv("LOGFIRE_TOKEN")}),
+)
+otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp)))
+```
+
+See [`examples/logfire`](./examples/logfire) for a complete, runnable example.
+
 ## Scope
 
 This port covers the core of Pydantic Evals: cases, datasets, the evaluation
 engine, the non-LLM built-in evaluators, metrics/attributes, lifecycle hooks,
-reporting, and YAML/JSON serialization. It intentionally omits the parts of the
-Python library that are tied to Python-specific infrastructure: OpenTelemetry
-span trees (and the `HasMatchingSpan` evaluator), the `LLMJudge` evaluator,
+reporting, YAML/JSON serialization, and OpenTelemetry tracing (exportable to
+Logfire). It intentionally omits the parts of the Python library that are tied to
+Python-specific infrastructure: the span-tree query API consumed inside
+evaluators (and the `HasMatchingSpan` evaluator), the `LLMJudge` evaluator,
 online evaluation, and the statistical report evaluators. The `Registry`
 extension point lets you add such evaluators yourself.
 

@@ -1,6 +1,7 @@
 package evals
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,16 @@ import (
 // stdout is the destination for [EvaluationReport.Print]. It is a variable so
 // tests can capture output.
 var stdout io.Writer = os.Stdout
+
+// jsonString renders a value as compact JSON for use as a span attribute,
+// falling back to fmt for values JSON cannot marshal.
+func jsonString(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(b)
+}
 
 // sprintValue renders an arbitrary value for a report cell. Maps are rendered
 // with sorted keys for deterministic output; everything else uses fmt's default.

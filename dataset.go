@@ -193,6 +193,9 @@ func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], op
 	tasks := d.buildTasksToRun(options.Repeat)
 	results := make([]caseResult[I, O, M], len(tasks))
 
+	expCtx, expSpan := startExperimentSpan(ctx, options.Name, options.TaskName, d.Name, len(d.Cases), options.Repeat, options.Metadata)
+	defer expSpan.End()
+
 	var sem chan struct{}
 	if options.MaxConcurrency > 0 {
 		sem = make(chan struct{}, options.MaxConcurrency)
@@ -207,7 +210,7 @@ func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], op
 				sem <- struct{}{}
 				defer func() { <-sem }()
 			}
-			results[idx] = d.runCase(ctx, task, tasks[idx], options.NewLifecycle)
+			results[idx] = d.runCase(expCtx, task, tasks[idx], options.TaskName, options.NewLifecycle)
 		}(i)
 	}
 	wg.Wait()
@@ -224,6 +227,9 @@ func (d *Dataset[I, O, M]) Evaluate(ctx context.Context, task TaskFunc[I, O], op
 			report.Cases = append(report.Cases, *r.success)
 		}
 	}
+	if avg := report.Averages(); avg != nil && avg.Assertions != nil {
+		setExperimentResultAttributes(expSpan, *avg.Assertions)
+	}
 	return report, nil
 }
 
@@ -236,6 +242,7 @@ func (d *Dataset[I, O, M]) runCase(
 	ctx context.Context,
 	task TaskFunc[I, O],
 	t taskToRun[I, O, M],
+	taskName string,
 	newLifecycle func(c Case[I, O, M]) Lifecycle[I, O, M],
 ) caseResult[I, O, M] {
 	var lc Lifecycle[I, O, M]
@@ -243,25 +250,29 @@ func (d *Dataset[I, O, M]) runCase(
 		lc = newLifecycle(t.c)
 	}
 
+	caseCtx, caseSpan := startCaseSpan(ctx, taskName, t.reportCaseName,
+		t.c.Inputs, t.c.Metadata, t.c.ExpectedOutput, t.c.HasMetadata, t.c.HasExpectedOutput, t.sourceCaseName)
+	defer caseSpan.End()
+
 	start := time.Now()
 	var result caseResult[I, O, M]
 
 	func() {
 		if lc != nil {
-			if err := lc.Setup(ctx); err != nil {
+			if err := lc.Setup(caseCtx); err != nil {
 				result.failure = d.newFailure(t, fmt.Errorf("setup: %w", err))
 				return
 			}
 		}
 
-		ec, err := d.runTask(ctx, task, t.c, t.reportCaseName)
+		ec, err := d.runTask(caseCtx, task, t.c, taskName)
 		if err != nil {
 			result.failure = d.newFailure(t, err)
 			return
 		}
 
 		if lc != nil {
-			ec, err = lc.PrepareContext(ctx, ec)
+			ec, err = lc.PrepareContext(caseCtx, ec)
 			if err != nil {
 				result.failure = d.newFailure(t, fmt.Errorf("prepare context: %w", err))
 				return
@@ -269,7 +280,7 @@ func (d *Dataset[I, O, M]) runCase(
 		}
 
 		evaluators := append(append([]Evaluator[I, O, M]{}, t.c.Evaluators...), d.Evaluators...)
-		evalResults, failures := runEvaluators(ctx, evaluators, ec)
+		evalResults, failures := runEvaluators(caseCtx, evaluators, ec)
 		assertions, scores, labels := groupResults(evalResults)
 
 		result.success = &ReportCase[I, O, M]{
@@ -293,27 +304,34 @@ func (d *Dataset[I, O, M]) runCase(
 	}()
 
 	if lc != nil {
-		if err := lc.Teardown(ctx, result.success, result.failure); err != nil {
+		if err := lc.Teardown(caseCtx, result.success, result.failure); err != nil {
 			result.success = nil
 			result.failure = d.newFailure(t, fmt.Errorf("teardown: %w", err))
-			return result
 		}
 	}
 
+	if result.failure != nil {
+		recordSpanError(caseSpan, fmt.Errorf("%s", result.failure.ErrorMessage))
+	}
 	if result.success != nil {
 		result.success.TotalDuration = time.Since(start)
+		setCaseResultAttributes(caseSpan, result.success)
 	}
 	return result
 }
 
-func (d *Dataset[I, O, M]) runTask(ctx context.Context, task TaskFunc[I, O], c Case[I, O, M], _ string) (*EvaluatorContext[I, O, M], error) {
+func (d *Dataset[I, O, M]) runTask(ctx context.Context, task TaskFunc[I, O], c Case[I, O, M], taskName string) (*EvaluatorContext[I, O, M], error) {
+	taskCtx, taskSpan := startTaskSpan(ctx, taskName)
+	defer taskSpan.End()
+
 	tr := newTaskRun()
-	taskCtx := withTaskRun(ctx, tr)
+	taskCtx = withTaskRun(taskCtx, tr)
 
 	t0 := time.Now()
 	output, err := task(taskCtx, c.Inputs)
 	duration := time.Since(t0)
 	if err != nil {
+		recordSpanError(taskSpan, err)
 		return nil, err
 	}
 
@@ -357,7 +375,12 @@ func runEvaluators[I, O, M any](ctx context.Context, evaluators []Evaluator[I, O
 		wg.Add(1)
 		go func(idx int, ev Evaluator[I, O, M]) {
 			defer wg.Done()
-			res, fail := runEvaluator(ctx, ev, ec)
+			evalCtx, evalSpan := startEvaluatorSpan(ctx, defaultEvaluationName(ev))
+			defer evalSpan.End()
+			res, fail := runEvaluator(evalCtx, ev, ec)
+			if fail != nil {
+				recordSpanError(evalSpan, fmt.Errorf("%s", fail.ErrorMessage))
+			}
 			outcomes[idx] = outcome{results: res, failure: fail}
 		}(i, e)
 	}
