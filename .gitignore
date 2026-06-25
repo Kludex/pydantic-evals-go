@@ -1,3 +1,7 @@
 *.out
 *.test
 /coverage.html
+
+# Stray example binaries
+/logfire
+/capitals
