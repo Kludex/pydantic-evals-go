@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // bxReport is a fixed-duration report used by the render tests so that the

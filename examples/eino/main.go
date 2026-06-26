@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	evals "github.com/Kludex/pydantic-evals-go"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/schema"
-	evals "github.com/pydantic/pydantic-evals-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"

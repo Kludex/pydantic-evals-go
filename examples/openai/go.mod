@@ -1,10 +1,10 @@
-module github.com/pydantic/pydantic-evals-go/examples/openai
+module github.com/Kludex/pydantic-evals-go/examples/openai
 
 go 1.25.0
 
 require (
 	github.com/openai/openai-go/v3 v3.41.0
-	github.com/pydantic/pydantic-evals-go v0.0.0
+	github.com/Kludex/pydantic-evals-go v0.0.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
@@ -36,4 +36,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/pydantic/pydantic-evals-go => ../..
+replace github.com/Kludex/pydantic-evals-go => ../..

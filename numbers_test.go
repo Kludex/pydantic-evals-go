@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // numScorer is a minimal named evaluator that returns a fixed Output, used to

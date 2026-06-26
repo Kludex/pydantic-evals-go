@@ -1,4 +1,4 @@
-module github.com/pydantic/pydantic-evals-go
+module github.com/Kludex/pydantic-evals-go
 
 go 1.25.0
 

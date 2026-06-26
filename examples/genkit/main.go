@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	evals "github.com/Kludex/pydantic-evals-go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	oai "github.com/firebase/genkit/go/plugins/compat_oai/openai"
-	evals "github.com/pydantic/pydantic-evals-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // TestCovSuiteContains exercises Suite.Contains, the type-bound builder facade

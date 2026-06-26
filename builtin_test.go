@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // evalOne runs a single evaluator against one synthesized case and returns the

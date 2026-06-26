@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // reportScorer emits a score, an assertion and a label under fixed names, with

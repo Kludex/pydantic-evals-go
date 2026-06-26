@@ -1,11 +1,11 @@
-// Command capitals demonstrates evaluating a simple function with pydantic-evals-go.
+// Command capitals demonstrates evaluating a simple function with the evals library.
 package main
 
 import (
 	"context"
 	"strings"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // matchAnswer scores 1.0 for an exact match, 0.8 for a case-insensitive

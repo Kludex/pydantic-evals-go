@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // renderOpts hides durations so example output is deterministic. The title is

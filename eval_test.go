@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 // ceEcho returns its input unchanged.

@@ -4,9 +4,9 @@
 
 ---
 
-**Documentation**: <a href="https://pkg.go.dev/github.com/pydantic/pydantic-evals-go">pkg.go.dev/github.com/pydantic/pydantic-evals-go</a>
+**Documentation**: <a href="https://pkg.go.dev/github.com/Kludex/pydantic-evals-go">pkg.go.dev/github.com/Kludex/pydantic-evals-go</a>
 
-**Source**: <a href="https://github.com/pydantic/pydantic-evals-go">github.com/pydantic/pydantic-evals-go</a>
+**Source**: <a href="https://github.com/Kludex/pydantic-evals-go">github.com/Kludex/pydantic-evals-go</a>
 
 ---
 
@@ -17,7 +17,7 @@ It's like a test framework — but for code whose output you *can't* pin down wi
 ## Install
 
 ```bash
-go get github.com/pydantic/pydantic-evals-go
+go get github.com/Kludex/pydantic-evals-go
 ```
 
 ## Example
@@ -30,7 +30,7 @@ package main
 import (
 	"context"
 
-	evals "github.com/pydantic/pydantic-evals-go"
+	evals "github.com/Kludex/pydantic-evals-go"
 )
 
 func main() {
@@ -89,7 +89,7 @@ Add it with `.With(Closeness{})`. Booleans become assertions, numbers become sco
 - **YAML/JSON** dataset save & load.
 - **OpenTelemetry** tracing, exportable to Logfire — no-op until you configure a provider.
 
-See the [package documentation](https://pkg.go.dev/github.com/pydantic/pydantic-evals-go) for the full guide and runnable examples, and [`examples/`](./examples) for complete programs (including the Logfire integration).
+See the [package documentation](https://pkg.go.dev/github.com/Kludex/pydantic-evals-go) for the full guide and runnable examples, and [`examples/`](./examples) for complete programs (including the Logfire integration).
 
 ## Scope
 
