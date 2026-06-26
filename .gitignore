@@ -2,6 +2,9 @@
 *.test
 /coverage.html
 
-# Stray example binaries
-/logfire
-/capitals
+# Compiled example binaries (each example dir's binary takes the dir's name)
+/examples/capitals/capitals
+/examples/logfire/logfire
+/examples/openai/openai
+/examples/genkit/genkit
+/examples/eino/eino
