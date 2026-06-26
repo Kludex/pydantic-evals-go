@@ -3,9 +3,13 @@ package evals_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	evals "github.com/Kludex/pydantic-evals-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // renderOpts hides durations so example output is deterministic. The title is
@@ -189,4 +193,43 @@ func ExampleConfig_repeat() {
 	fmt.Printf("%d run(s) of %q\n", len(groups[0].Runs), groups[0].Name)
 	// Output:
 	// 3 run(s) of "c1"
+}
+
+// Example_logfire wires an OTLP exporter to Pydantic Logfire so that the span
+// tree emitted by Evaluate — an experiment span, a span per case, per task run,
+// and per evaluator — shows up in Logfire's evaluation views.
+//
+// Instrumentation uses the global tracer provider, so configuring one is all it
+// takes; the library code is unchanged. Set LOGFIRE_TOKEN to a Logfire write
+// token (the US endpoint is used here; use logfire-eu for the EU region).
+func Example_logfire() {
+	ctx := context.Background()
+
+	exporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpointURL("https://logfire-us.pydantic.dev/v1/traces"),
+		otlptracehttp.WithHeaders(map[string]string{
+			"Authorization": os.Getenv("LOGFIRE_TOKEN"),
+		}),
+	)
+	if err != nil {
+		panic(err)
+	}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+	otel.SetTracerProvider(tp)
+	defer tp.Shutdown(ctx) // flush buffered spans before exit
+
+	s := evals.For[string, string, any]()
+	dataset := s.Dataset("capitals",
+		s.Case("What is the capital of France?").Name("france").Expect("Paris"),
+	).With(s.EqualsExpected())
+
+	answer := func(ctx context.Context, q string) (string, error) {
+		return "Paris", nil
+	}
+
+	report, err := dataset.Evaluate(ctx, answer, evals.Config{Name: "capitals-experiment"})
+	if err != nil {
+		panic(err)
+	}
+	report.Print()
 }

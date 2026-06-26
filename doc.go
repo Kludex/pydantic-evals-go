@@ -112,7 +112,9 @@ Custom evaluators that should round-trip implement [SpecEvaluator].
 per case, a span per task run, and a span per evaluator — using the global
 tracer provider. It costs nothing until you configure one. Point an OTLP exporter
 at Logfire and call otel.SetTracerProvider to see your experiments in Logfire's
-evaluation views. See the example under examples/logfire in the repository.
+evaluation views; see the Logfire example below for the full wiring. The
+repository's examples directory also has end-to-end programs evaluating agents
+built on the OpenAI Go SDK, Genkit, and Eino.
 
 [Pydantic Evals]: https://ai.pydantic.dev/evals
 [Pydantic Logfire]: https://logfire.pydantic.dev
