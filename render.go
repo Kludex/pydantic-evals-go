@@ -2,6 +2,7 @@ package evals
 
 import (
 	"io"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -132,9 +133,10 @@ func (r *EvaluationReport[I, O, M]) Render(opts ...RenderOptions) string {
 	return renderTable(title, headers, rows, rightAlign)
 }
 
-// Print writes the rendered report to standard output.
+// Print writes the rendered report to standard output. To write elsewhere
+// (a file, a buffer, a test), use [EvaluationReport.Fprint].
 func (r *EvaluationReport[I, O, M]) Print(opts ...RenderOptions) {
-	r.Fprint(stdout, opts...)
+	r.Fprint(os.Stdout, opts...)
 }
 
 // Fprint writes the rendered report to w.

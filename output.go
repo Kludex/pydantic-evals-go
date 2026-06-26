@@ -3,15 +3,9 @@ package evals
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"sort"
 	"strings"
 )
-
-// stdout is the destination for [EvaluationReport.Print]. It is a variable so
-// tests can capture output.
-var stdout io.Writer = os.Stdout
 
 // jsonString renders a value as compact JSON for use as a span attribute,
 // falling back to fmt for values JSON cannot marshal.
