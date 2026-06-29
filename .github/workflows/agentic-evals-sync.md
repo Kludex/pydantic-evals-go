@@ -29,7 +29,7 @@ tools:
     - "go vet:*"
     - "go test:*"
   github:
-    toolsets: [default]
+    toolsets: [repos, pull_requests]
 safe-outputs:
   threat-detection: false
   noop:
