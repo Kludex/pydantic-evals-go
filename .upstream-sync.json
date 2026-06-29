@@ -1,0 +1,7 @@
+{
+  "$comment": "Tracks the upstream pydantic_evals source this Go port is synced against. The agentic-evals-sync workflow diffs the upstream subpath between `commit` and pydantic-ai main, ports any relevant changes, and bumps `commit` in the same PR.",
+  "repo": "pydantic/pydantic-ai",
+  "subpath": "pydantic_evals/pydantic_evals",
+  "commit": "4ff3d2217f60644a753905c7e8b269dbaa913d7c",
+  "synced_at": "2026-06-29"
+}
