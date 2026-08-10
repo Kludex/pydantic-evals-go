@@ -180,9 +180,17 @@ behavioral to port — `safeoutputs noop` is a perfectly good outcome.
    (In that case, the PR is just the pin bump with a body explaining why nothing
    was ported.)
 
-7. **Open a draft PR** via `safeoutputs create_pull_request`. **Leave your file
-   edits uncommitted in the working tree** — gh-aw branches, commits, and pushes
-   for you. Do not run `git checkout -b` / `git add` / `git commit` yourself.
+7. **Commit onto a branch, then open a draft PR.** `safeoutputs
+   create_pull_request` bundles commits, not a dirty working tree — an
+   uncommitted tree produces an empty bundle and the PR fails with
+   `field: head, code: invalid`. So, in order:
+   - `git checkout -b sync-<short-sha>-<YYYYMMDD>` (gh-aw prefixes
+     `evals-sync/` itself — do not include it in the name you pass).
+   - `git add -A && git commit` with the PR title as the subject.
+   - Call `safeoutputs create_pull_request` with `branch` set to the branch you
+     just committed to. Verify with `git rev-list --count main..HEAD` that the
+     branch has at least one commit before calling.
+   - Do **not** `git push`; gh-aw pushes the branch for you.
    - **Title:** one line, e.g. `Sync pydantic_evals up to <short-sha>`.
    - **Body:**
      > Ports upstream `pydantic_evals` changes (`<base>..<head>`) into the Go port.
