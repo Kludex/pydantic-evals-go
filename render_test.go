@@ -518,3 +518,82 @@ func (bxScoreEvaluator) Evaluate(_ context.Context, _ *evals.EvaluatorContext[st
 }
 
 func (bxScoreEvaluator) EvaluationName() string { return "MyEvaluator" }
+
+// TestBxRenderASCIIOnly confirms that RenderOptions.ASCIIOnly swaps the Unicode
+// assertion marks (✔/✗) and the micro unit (µs) for ASCII stand-ins (v/x/us)
+// when rendering. Mirrors the equivalent behavior added upstream in
+// pydantic/pydantic-ai#7290.
+func TestBxRenderASCIIOnly(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:    "case1",
+				Output:  "out1",
+				Metrics: map[string]float64{"m": 3},
+				Assertions: map[string]evals.EvaluationResult{
+					"ok":  {Name: "ok", Value: evals.Bool(true)},
+					"bad": {Name: "bad", Value: evals.Bool(false)},
+				},
+				TaskDuration: 100 * time.Microsecond,
+			},
+		},
+	}
+
+	// Default rendering still uses ✔/✗/µs — the ASCIIOnly flag must be opt-in.
+	defaultOut := rep.Render()
+	for _, want := range []string{"✔", "✗", "µs"} {
+		if !strings.Contains(defaultOut, want) {
+			t.Fatalf("default render missing %q:\n%s", want, defaultOut)
+		}
+	}
+
+	// ASCIIOnly=true swaps in v/x/us. Assertions render alphabetically by key,
+	// so "bad" (✗) renders before "ok" (✔).
+	const want = "           Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Metrics ┃ Assertions ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ case1    │ m: 3    │ xv         │    100us │\n" +
+		"├──────────┼─────────┼────────────┼──────────┤\n" +
+		"│ Averages │ m: 3.00 │ 50.0% v    │    100us │\n" +
+		"└──────────┴─────────┴────────────┴──────────┘"
+	asciiOpt := evals.RenderOptions{ASCIIOnly: true, IncludeDurations: true, IncludeAverages: true}
+	if got := rep.Render(asciiOpt); got != want {
+		t.Fatalf("Render(ASCIIOnly=true) mismatch:\n got %q\nwant %q", got, want)
+	}
+	if got := rep.Render(asciiOpt); strings.Contains(got, "✔") || strings.Contains(got, "✗") || strings.Contains(got, "µs") {
+		t.Fatalf("ASCIIOnly render should not contain ✔/✗/µs but does:\n%s", got)
+	}
+}
+
+// TestBxRenderDefaultKeepsUnicode confirms the default Render() output still
+// emits ✔/✗/µs — verifying the ASCIIOnly flag is opt-in and doesn't change the
+// behavior callers see without setting it.
+func TestBxRenderDefaultKeepsUnicode(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "case1",
+				Output: "out1",
+				Assertions: map[string]evals.EvaluationResult{
+					"ok":  {Name: "ok", Value: evals.Bool(true)},
+					"bad": {Name: "bad", Value: evals.Bool(false)},
+				},
+				TaskDuration: 100 * time.Microsecond,
+			},
+		},
+	}
+	const want = "      Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Assertions ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ case1    │ ✗✔         │    100µs │\n" +
+		"├──────────┼────────────┼──────────┤\n" +
+		"│ Averages │ 50.0% ✔    │    100µs │\n" +
+		"└──────────┴────────────┴──────────┘"
+	if got := rep.Render(); got != want {
+		t.Fatalf("Render() default mismatch:\n got %q\nwant %q", got, want)
+	}
+}
