@@ -44,8 +44,10 @@ func formatPercentage(value float64) string {
 }
 
 // formatDuration formats a duration for reports, choosing µs/ms/s units to match
-// Python's `default_render_duration`.
-func formatDuration(d time.Duration) string {
+// Python's `default_render_duration`. When asciiOnly is true the sub-millisecond
+// unit becomes `us` instead of `µs` for stream encodings that can't render the
+// micro sign.
+func formatDuration(d time.Duration, asciiOnly bool) string {
 	seconds := d.Seconds()
 	if seconds == 0 {
 		return "0s"
@@ -57,7 +59,11 @@ func formatDuration(d time.Duration) string {
 	switch {
 	case absSeconds < 1e-3:
 		value = seconds * 1_000_000
-		unit = "µs"
+		if asciiOnly {
+			unit = "us"
+		} else {
+			unit = "µs"
+		}
 		if math.Abs(value) >= 1 {
 			precision = 0
 		}

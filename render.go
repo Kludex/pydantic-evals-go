@@ -19,6 +19,13 @@ type RenderOptions struct {
 	IncludeAverages       bool
 	IncludeReasons        bool
 
+	// ASCIIOnly replaces the ✔/✗ assertion marks with v/x and renders sub-millisecond
+	// durations with `us` instead of `µs`. Use it when the destination stream can't
+	// encode those characters. The box-drawing characters used by the table borders
+	// are not affected — pick a font you can render if your console doesn't speak
+	// UTF-8.
+	ASCIIOnly bool
+
 	// Title overrides the default "Evaluation Summary: <name>" title. An empty
 	// Title uses the default; set OmitTitle to render no title at all.
 	Title string
@@ -44,6 +51,24 @@ func stringFmt(v any) string {
 	default:
 		return sprintValue(v)
 	}
+}
+
+// checkMark returns the assertion pass glyph, falling back to "v" when the
+// destination stream can't encode "✔".
+func checkMark(asciiOnly bool) string {
+	if asciiOnly {
+		return "v"
+	}
+	return "✔"
+}
+
+// crossMark returns the assertion fail glyph, falling back to "x" when the
+// destination stream can't encode "✗".
+func crossMark(asciiOnly bool) string {
+	if asciiOnly {
+		return "x"
+	}
+	return "✗"
 }
 
 // Render returns the report rendered as a box-drawing table string.
@@ -100,6 +125,7 @@ func (r *EvaluationReport[I, O, M]) Render(opts ...RenderOptions) string {
 
 	rc := reportColumns[I, O, M]{
 		opts:                o,
+		asciiOnly:           o.ASCIIOnly,
 		includeScores:       includeScores,
 		includeLabels:       includeLabels,
 		includeMetrics:      includeMetrics,
@@ -147,6 +173,7 @@ func (r *EvaluationReport[I, O, M]) Fprint(w io.Writer, opts ...RenderOptions) {
 
 type reportColumns[I, O, M any] struct {
 	opts                RenderOptions
+	asciiOnly           bool
 	includeScores       bool
 	includeLabels       bool
 	includeMetrics      bool
@@ -178,7 +205,7 @@ func (rc reportColumns[I, O, M]) caseRow(c ReportCase[I, O, M]) []string {
 		row = append(row, renderMetrics(c.Metrics))
 	}
 	if rc.includeAssertions {
-		row = append(row, renderAssertions(c.Assertions, rc.opts.IncludeReasons))
+		row = append(row, renderAssertions(c.Assertions, rc.opts.IncludeReasons, rc.asciiOnly))
 	}
 	if rc.includeEvalFailures {
 		row = append(row, renderEvalFailures(c.EvaluatorFailures))
@@ -213,7 +240,7 @@ func (rc reportColumns[I, O, M]) aggregateRow(a ReportCaseAggregate) []string {
 		row = append(row, renderNumberMap(a.Metrics))
 	}
 	if rc.includeAssertions {
-		row = append(row, formatPercentage(*a.Assertions)+" ✔")
+		row = append(row, formatPercentage(*a.Assertions)+" "+checkMark(rc.asciiOnly))
 	}
 	if rc.includeEvalFailures {
 		row = append(row, "")
@@ -226,9 +253,9 @@ func (rc reportColumns[I, O, M]) aggregateRow(a ReportCaseAggregate) []string {
 
 func (rc reportColumns[I, O, M]) durations(task, total time.Duration) string {
 	if !rc.opts.IncludeTotalDuration {
-		return formatDuration(task)
+		return formatDuration(task, rc.asciiOnly)
 	}
-	return "task: " + formatDuration(task) + "\ntotal: " + formatDuration(total)
+	return "task: " + formatDuration(task, rc.asciiOnly) + "\ntotal: " + formatDuration(total, rc.asciiOnly)
 }
 
 func renderScoreResults(m map[string]EvaluationResult, includeReasons bool) string {
@@ -288,16 +315,16 @@ func renderLabelDist(m map[string]map[string]float64) string {
 	return orDash(strings.Join(lines, "\n"))
 }
 
-func renderAssertions(m map[string]EvaluationResult, includeReasons bool) string {
+func renderAssertions(m map[string]EvaluationResult, includeReasons, asciiOnly bool) string {
 	if len(m) == 0 {
 		return "-"
 	}
 	var b strings.Builder
 	for _, k := range sortedKeys(m) {
 		a := m[k]
-		mark := "✗"
+		mark := crossMark(asciiOnly)
 		if bool(a.Value.(Bool)) {
-			mark = "✔"
+			mark = checkMark(asciiOnly)
 		}
 		if includeReasons {
 			b.WriteString(a.Name + ": " + mark + "\n")
