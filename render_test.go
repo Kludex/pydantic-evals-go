@@ -449,6 +449,36 @@ func TestBxRenderLargeFloatScore(t *testing.T) {
 	}
 }
 
+// TestBxRenderASCIIOnly covers the ASCII fallback for non-UTF-8 consoles: ✔/✗
+// become v/x and µs becomes us. The box-drawing borders are unchanged.
+func TestBxRenderASCIIOnly(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "task",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "pass",
+				Output: "out",
+				Assertions: map[string]evals.EvaluationResult{
+					"ok":  {Name: "ok", Value: evals.Bool(true)},
+					"bad": {Name: "bad", Value: evals.Bool(false)},
+				},
+				TaskDuration: 1500 * time.Nanosecond,
+			},
+		},
+	}
+	const want = "      Evaluation Summary: task\n" +
+		"┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓\n" +
+		"┃ Case ID  ┃ Assertions ┃ Duration ┃\n" +
+		"┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩\n" +
+		"│ pass     │ xv         │      2us │\n" +
+		"├──────────┼────────────┼──────────┤\n" +
+		"│ Averages │ 50.0% v    │      2us │\n" +
+		"└──────────┴────────────┴──────────┘"
+	if got := rep.Render(evals.RenderOptions{IncludeDurations: true, IncludeAverages: true, ASCIIOnly: true}); got != want {
+		t.Fatalf("Render() ASCII-only mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestBxFprintWritesRenderPlusNewline(t *testing.T) {
 	rep := bxReport(t)
 	var buf bytes.Buffer
