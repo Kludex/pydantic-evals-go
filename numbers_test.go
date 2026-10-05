@@ -2,6 +2,7 @@ package evals_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -292,5 +293,39 @@ func TestNumbersZeroDurationTaskOnly(t *testing.T) {
 └──────────┴─────────┴──────────┘`
 	if got != want {
 		t.Fatalf("task-only zero-duration rendering mismatch.\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestNumbersNonFiniteRendering covers the `inf` / `-inf` / `nan` branches of
+// formatNumber, mirroring `default_render_number` in render_numbers.py.
+func TestNumbersNonFiniteRendering(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "exp",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "c1",
+				Output: "x",
+				Scores: map[string]evals.EvaluationResult{
+					"p_inf": {Name: "p_inf", Value: evals.Float(math.Inf(1))},
+					"n_inf": {Name: "n_inf", Value: evals.Float(math.Inf(-1))},
+					"nan":   {Name: "nan", Value: evals.Float(math.NaN())},
+				},
+				Metrics: map[string]float64{
+					"m_p_inf": math.Inf(1),
+					"m_n_inf": math.Inf(-1),
+					"m_nan":   math.NaN(),
+				},
+				TaskDuration: time.Millisecond,
+			},
+		},
+	}
+	got := rep.Render(evals.RenderOptions{IncludeDurations: true, IncludeAverages: true})
+	for _, sub := range []string{
+		"p_inf: inf", "n_inf: -inf", "nan: nan",
+		"m_p_inf: inf", "m_n_inf: -inf", "m_nan: nan",
+	} {
+		if !strings.Contains(got, sub) {
+			t.Fatalf("missing %q in:\n%s", sub, got)
+		}
 	}
 }
