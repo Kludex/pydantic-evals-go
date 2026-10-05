@@ -12,10 +12,16 @@ const valueSigFigs = 3
 
 // formatNumber formats a numeric value for reports: integers as integers (with
 // thousands separators), floats with at least one decimal and at least three
-// significant figures. This mirrors Python's `default_render_number`.
+// significant figures. Non-finite floats are rendered as `inf`, `-inf`, or
+// `nan`, matching Python's `default_render_number`.
 func formatNumber(value float64, isInt bool) string {
 	if isInt {
 		return withThousands(strconv.FormatInt(int64(value), 10))
+	}
+
+	// Non-finite floats would distort the log10-based logic below.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return formatNonFinite(value)
 	}
 
 	absVal := math.Abs(value)
@@ -35,6 +41,19 @@ func formatNumber(value float64, isInt bool) string {
 		decimals = -exponent + valueSigFigs - 1
 	}
 	return formatFixed(value, decimals)
+}
+
+// formatNonFinite renders inf, -inf, or nan lowercase with a single leading
+// minus sign for negative infinity, matching Python's `str()` output.
+func formatNonFinite(value float64) string {
+	switch {
+	case math.IsNaN(value):
+		return "nan"
+	case math.IsInf(value, 1):
+		return "inf"
+	default:
+		return "-inf"
+	}
 }
 
 // formatPercentage formats a fraction as a percentage with one decimal place,
