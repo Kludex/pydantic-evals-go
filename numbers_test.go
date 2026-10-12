@@ -2,6 +2,7 @@ package evals_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,39 @@ func TestNumbersThousandsEdgeCases(t *testing.T) {
 └──────────┴───────────────────────┴──────────────────────────┘`
 	if got != want {
 		t.Fatalf("thousands edge-case rendering mismatch.\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestNumbersNonFiniteMetricMirrorsPython checks that non-finite metric values
+// (Inf, -Inf, NaN) render as the lowercase `inf`, `-inf`, or `nan` matching
+// Python's `default_render_number`. Without the short-circuit the log10-based
+// significant-figures path would produce a meaningless value. Float scores are
+// rejected by [validateScalar], so the test drives non-finite values through
+// IncrementMetric, which does not validate.
+func TestNumbersNonFiniteMetricMirrorsPython(t *testing.T) {
+	task := func(ctx context.Context, in string) (string, error) {
+		evals.IncrementMetric(ctx, "p_inf", math.Inf(1))
+		evals.IncrementMetric(ctx, "n_inf", -math.Inf(1))
+		evals.IncrementMetric(ctx, "nan_v", math.NaN())
+		return in, nil
+	}
+	got := numRenderTask(t, task, numScorer{name: "sc", out: evals.Score(1.5)})
+	wants := []string{
+		"n_inf: -inf",
+		"nan_v: nan",
+		"p_inf: inf",
+	}
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Fatalf("non-finite metric rendering missing %q.\n got:\n%s", want, got)
+		}
+	}
+
+	// A non-finite metric should not leak Go's +Inf/-Inf/NaN strconv output.
+	for _, leakage := range []string{"+Inf", "-Inf", "NaN"} {
+		if strings.Contains(got, leakage) {
+			t.Fatalf("non-finite metric rendering leaked %q.\n got:\n%s", leakage, got)
+		}
 	}
 }
 

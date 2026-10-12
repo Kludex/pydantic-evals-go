@@ -12,10 +12,17 @@ const valueSigFigs = 3
 
 // formatNumber formats a numeric value for reports: integers as integers (with
 // thousands separators), floats with at least one decimal and at least three
-// significant figures. This mirrors Python's `default_render_number`.
+// significant figures. Non-finite floats render as the lowercase `inf`, `-inf`,
+// or `nan` to match Python's `default_render_number`. This mirrors Python's
+// `default_render_number`.
 func formatNumber(value float64, isInt bool) string {
 	if isInt {
 		return withThousands(strconv.FormatInt(int64(value), 10))
+	}
+
+	// Non-finite floats break the log10-based significant-figure logic below.
+	if !isFinite(value) {
+		return nonFiniteString(value)
 	}
 
 	absVal := math.Abs(value)
@@ -112,4 +119,26 @@ func withThousands(s string) string {
 		out = "-" + out
 	}
 	return out
+}
+
+// isFinite reports whether value is a finite number (not Inf, -Inf, or NaN).
+// It mirrors `math.isfinite` so the report renderer treats non-finite metrics
+// the same way Python does.
+func isFinite(value float64) bool {
+	return !math.IsInf(value, 0) && !math.IsNaN(value)
+}
+
+// nonFiniteString returns the lowercase Python-style representation of a
+// non-finite float: "inf", "-inf", or "nan". `strconv.FormatFloat` would return
+// "+Inf"/"-Inf"/"NaN", which doesn't line up with Python's `str(math.inf)` etc.
+func nonFiniteString(value float64) string {
+	switch {
+	case math.IsNaN(value):
+		return "nan"
+	case math.IsInf(value, 1):
+		return "inf"
+	case math.IsInf(value, -1):
+		return "-inf"
+	}
+	return "" // unreachable: caller checks isFinite first
 }
