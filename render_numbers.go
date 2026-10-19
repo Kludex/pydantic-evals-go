@@ -12,10 +12,22 @@ const valueSigFigs = 3
 
 // formatNumber formats a numeric value for reports: integers as integers (with
 // thousands separators), floats with at least one decimal and at least three
-// significant figures. This mirrors Python's `default_render_number`.
+// significant figures, and non-finite floats as `inf`, `-inf`, or `nan`. This
+// mirrors Python's `default_render_number`.
 func formatNumber(value float64, isInt bool) string {
 	if isInt {
 		return withThousands(strconv.FormatInt(int64(value), 10))
+	}
+
+	// Non-finite floats would misbehave in the log10-based logic below.
+	if math.IsNaN(value) {
+		return "nan"
+	}
+	if math.IsInf(value, 0) {
+		if value > 0 {
+			return "inf"
+		}
+		return "-inf"
 	}
 
 	absVal := math.Abs(value)

@@ -173,6 +173,20 @@ func TestAveragesAssertionsNilWhenNoAssertions(t *testing.T) {
 	}
 }
 
+// TestEvaluationReportDatasetName checks that the dataset name is recorded on
+// the report produced by Evaluate, matching the upstream `dataset_name` field
+// added to EvaluationReport (#10307).
+func TestEvaluationReportDatasetName(t *testing.T) {
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("a")),
+	}
+	ds := mustDataset(t, "myset", cases)
+	report := mustEvaluate(t, ds, identityTask)
+	if report.DatasetName != "myset" {
+		t.Fatalf("expected DatasetName %q, got %q", "myset", report.DatasetName)
+	}
+}
+
 func TestCaseGroupsPopulatedForRepeat(t *testing.T) {
 	cases := []evals.Case[int, int, any]{
 		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("only"),
