@@ -2,6 +2,7 @@ package evals_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -292,5 +293,42 @@ func TestNumbersZeroDurationTaskOnly(t *testing.T) {
 └──────────┴─────────┴──────────┘`
 	if got != want {
 		t.Fatalf("task-only zero-duration rendering mismatch.\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestNumbersNonFiniteFloatRendering covers the inf / -inf / nan branches of
+// formatNumber, mirroring upstream's `default_render_number` non-finite handling
+// (#8852). Non-finite floats would otherwise produce nonsense from the log10
+// logic.
+func TestNumbersNonFiniteFloatRendering(t *testing.T) {
+	cases := []struct {
+		name string
+		in   float64
+		want string
+	}{
+		{"positive_inf", math.Inf(1), "inf"},
+		{"negative_inf", math.Inf(-1), "-inf"},
+		{"nan", math.NaN(), "nan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := &evals.EvaluationReport[string, string, any]{
+				Name: "exp",
+				Cases: []evals.ReportCase[string, string, any]{
+					{
+						Name:         "c1",
+						Output:       "o",
+						Scores:       map[string]evals.EvaluationResult{"s": {Name: "s", Value: evals.Float(tc.in)}},
+						TaskDuration: time.Millisecond,
+					},
+				},
+			}
+			// We only inspect the score cell, not the entire table, because the
+			// average across a single non-finite value is itself non-finite and
+			// formats the same way.
+			if got := rep.Render(evals.RenderOptions{IncludeDurations: true, IncludeAverages: true}); !strings.Contains(got, tc.want) {
+				t.Fatalf("render missing %q in:\n%s", tc.want, got)
+			}
+		})
 	}
 }

@@ -96,6 +96,8 @@ type ReportCaseGroup[I, O, M any] struct {
 type EvaluationReport[I, O, M any] struct {
 	// Name of the report (the experiment name).
 	Name string
+	// DatasetName is the name of the dataset that produced this report, if any.
+	DatasetName string
 	// Cases that were evaluated successfully.
 	Cases []ReportCase[I, O, M]
 	// Failures are cases whose task execution raised an error.
