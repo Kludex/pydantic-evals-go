@@ -214,7 +214,7 @@ func (d *Dataset[I, O, M]) evaluate(ctx context.Context, task TaskFunc[I, O], c 
 		return nil, err
 	}
 
-	report := &EvaluationReport[I, O, M]{Name: name, ExperimentMetadata: c.Metadata}
+	report := &EvaluationReport[I, O, M]{Name: name, DatasetName: d.Name, ExperimentMetadata: c.Metadata}
 	for _, r := range results {
 		if r.failure != nil {
 			report.Failures = append(report.Failures, *r.failure)

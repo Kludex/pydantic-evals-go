@@ -12,10 +12,16 @@ const valueSigFigs = 3
 
 // formatNumber formats a numeric value for reports: integers as integers (with
 // thousands separators), floats with at least one decimal and at least three
-// significant figures. This mirrors Python's `default_render_number`.
+// significant figures, and non-finite floats as "inf", "-inf", or "nan".
+// This mirrors Python's `default_render_number`.
 func formatNumber(value float64, isInt bool) string {
 	if isInt {
 		return withThousands(strconv.FormatInt(int64(value), 10))
+	}
+
+	// Non-finite floats would raise in the log10-based logic below.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return renderNonFinite(value)
 	}
 
 	absVal := math.Abs(value)
@@ -78,6 +84,14 @@ func formatDuration(d time.Duration, asciiOnly bool) string {
 // formatFixed formats with the given number of decimals plus thousands separators.
 func formatFixed(value float64, decimals int) string {
 	return withThousands(strconv.FormatFloat(value, 'f', decimals, 64))
+}
+
+// renderNonFinite formats a non-finite float as Python's str() does ("inf",
+// "-inf", "nan") rather than Go's strconv shape ("+Inf", "-Inf", "NaN").
+func renderNonFinite(value float64) string {
+	s := strconv.FormatFloat(value, 'f', -1, 64)
+	s = strings.TrimPrefix(s, "+")
+	return strings.ToLower(s)
 }
 
 // withThousands inserts comma thousands separators into the integer part of a
