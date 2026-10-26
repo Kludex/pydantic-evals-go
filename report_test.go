@@ -434,3 +434,19 @@ func TestAveragesNilWhenAllGroupsFail(t *testing.T) {
 		t.Fatalf("expected nil averages when all groups are failure-only, got %+v", report.Averages())
 	}
 }
+
+// TestReportDatasetNamePropagation covers the upstream PR #10307 change that
+// threads the dataset's name onto the EvaluationReport so downstream consumers
+// (logging, persistence, cross-references) can link the report back to its
+// source dataset.
+func TestReportDatasetNamePropagation(t *testing.T) {
+	cases := []evals.Case[int, int, any]{
+		evals.NewCase[int, int, any](1, evals.WithCaseName[int, int, any]("a")),
+	}
+	ds := mustDataset(t, "stats-2025-q4", cases)
+
+	report := mustEvaluate(t, ds, identityTask)
+	if report.DatasetName != "stats-2025-q4" {
+		t.Fatalf("expected dataset name %q on report, got %q", "stats-2025-q4", report.DatasetName)
+	}
+}

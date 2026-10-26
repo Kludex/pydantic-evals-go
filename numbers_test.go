@@ -2,6 +2,7 @@ package evals_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -292,5 +293,33 @@ func TestNumbersZeroDurationTaskOnly(t *testing.T) {
 └──────────┴─────────┴──────────┘`
 	if got != want {
 		t.Fatalf("task-only zero-duration rendering mismatch.\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestNumbersNonFiniteFloatRendering covers the "Non-finite floats are rendered
+// as `inf`/`-inf`/`nan`" rule added by upstream #8852, applied through the
+// report's aggregate (Averages) row — there's no direct way for an evaluator to
+// emit inf/nan scores after validateScalar, but the aggregate path applies the
+// same formatNumber path to metrics.
+func TestNumbersNonFiniteFloatRendering(t *testing.T) {
+	rep := &evals.EvaluationReport[string, string, any]{
+		Name: "exp",
+		Cases: []evals.ReportCase[string, string, any]{
+			{
+				Name:   "c1",
+				Output: "x",
+				Metrics: map[string]float64{
+					"pos_inf": math.Inf(1),
+					"neg_inf": math.Inf(-1),
+					"nan":     math.NaN(),
+				},
+			},
+		},
+	}
+	got := rep.Render(evals.RenderOptions{IncludeAverages: true})
+	for _, want := range []string{"pos_inf: inf", "neg_inf: -inf", "nan: nan"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected substring %q in:\n%s", want, got)
+		}
 	}
 }
