@@ -409,6 +409,60 @@ func TestConfigRepeatNegativeError(t *testing.T) {
 	}
 }
 
+func TestConfigTaskTimeoutNegativeError(t *testing.T) {
+	s := ceSuite()
+	ds := s.Dataset("d", s.Case("a").Name("only"))
+	_, err := ds.Evaluate(context.Background(), ceEcho, evals.Config{TaskTimeout: -time.Second})
+	if err == nil || err.Error() != "task timeout must be >= 0, got -1s" {
+		t.Fatalf("expected task timeout error, got %v", err)
+	}
+}
+
+func TestConfigTaskTimeout(t *testing.T) {
+	s := ceSuite()
+	ds := s.Dataset("d", s.Case("slow").Name("slow"), s.Case("fast").Name("fast"), s.Case("ctx").Name("ctx"))
+	release := make(chan struct{})
+	defer close(release)
+	task := func(ctx context.Context, in string) (string, error) {
+		switch in {
+		case "slow":
+			<-release // ignores ctx, so it must be abandoned
+		case "ctx":
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		return in, nil
+	}
+	report, err := ds.Evaluate(context.Background(), task, evals.Config{TaskTimeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(report.Cases) != 1 || report.Cases[0].Name != "fast" {
+		t.Fatalf("cases = %+v", report.Cases)
+	}
+	if len(report.Failures) != 2 {
+		t.Fatalf("failures = %+v", report.Failures)
+	}
+	for _, f := range report.Failures {
+		if f.ErrorMessage != "task timed out after 20ms" {
+			t.Fatalf("%s: error message = %q", f.Name, f.ErrorMessage)
+		}
+	}
+}
+
+func TestConfigTaskTimeoutTaskError(t *testing.T) {
+	s := ceSuite()
+	ds := s.Dataset("d", s.Case("a").Name("boom"))
+	failing := func(_ context.Context, _ string) (string, error) { return "", errors.New("task exploded") }
+	report, err := ds.Evaluate(context.Background(), failing, evals.Config{TaskTimeout: time.Minute})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(report.Failures) != 1 || report.Failures[0].ErrorMessage != "task exploded" {
+		t.Fatalf("failures = %+v", report.Failures)
+	}
+}
+
 func TestConfigRepeatZeroIsOne(t *testing.T) {
 	s := ceSuite()
 	ds := s.Dataset("d", s.Case("a").Name("only"))
@@ -461,6 +515,9 @@ func TestZeroConfig(t *testing.T) {
 	}
 	if report.Name != "task" || len(report.Cases) != 1 {
 		t.Fatalf("zero config: name=%q cases=%d", report.Name, len(report.Cases))
+	}
+	if report.DatasetName != "d" {
+		t.Fatalf("dataset name = %q", report.DatasetName)
 	}
 }
 

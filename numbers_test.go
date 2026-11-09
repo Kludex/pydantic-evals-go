@@ -2,6 +2,7 @@ package evals_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,23 @@ func TestNumbersLargeWholeMetricThousands(t *testing.T) {
 └──────────┴──────────┴─────────────────────┘`
 	if got != want {
 		t.Fatalf("large whole metric rendering mismatch.\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestNumbersNonFiniteMetrics checks non-finite metrics render as inf/-inf/nan
+// instead of going through the significant-figures logic.
+func TestNumbersNonFiniteMetrics(t *testing.T) {
+	task := func(ctx context.Context, in string) (string, error) {
+		evals.IncrementMetric(ctx, "a", math.Inf(1))
+		evals.IncrementMetric(ctx, "b", math.Inf(-1))
+		evals.IncrementMetric(ctx, "c", math.NaN())
+		return in, nil
+	}
+	got := numRenderTask(t, task)
+	for _, want := range []string{"a: inf", "b: -inf", "c: nan"} {
+		if strings.Count(got, want) != 2 {
+			t.Fatalf("want %q in the case and averages rows, got:\n%s", want, got)
+		}
 	}
 }
 

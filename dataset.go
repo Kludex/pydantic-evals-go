@@ -110,6 +110,12 @@ type Config struct {
 	Repeat int
 	// Metadata is arbitrary experiment metadata recorded on the report.
 	Metadata map[string]any
+	// TaskTimeout bounds each task call; zero means no limit. A call that
+	// overruns it is reported as a case failure while the other cases continue.
+	// The task's context is cancelled, but a task that ignores it keeps running
+	// in the background and its result is discarded. Lifecycle hooks and
+	// evaluators are not bounded.
+	TaskTimeout time.Duration
 }
 
 type taskToRun[I, O, M any] struct {
@@ -172,6 +178,9 @@ func (d *Dataset[I, O, M]) evaluate(ctx context.Context, task TaskFunc[I, O], c 
 	if c.Repeat < 0 {
 		return nil, fmt.Errorf("repeat must be >= 0, got %d", c.Repeat)
 	}
+	if c.TaskTimeout < 0 {
+		return nil, fmt.Errorf("task timeout must be >= 0, got %s", c.TaskTimeout)
+	}
 	repeat := c.Repeat
 	if repeat == 0 {
 		repeat = 1
@@ -205,7 +214,7 @@ func (d *Dataset[I, O, M]) evaluate(ctx context.Context, task TaskFunc[I, O], c 
 				sem <- struct{}{}
 				defer func() { <-sem }()
 			}
-			results[idx] = d.runCase(expCtx, task, tasks[idx], taskName, newLifecycle)
+			results[idx] = d.runCase(expCtx, task, tasks[idx], taskName, c.TaskTimeout, newLifecycle)
 		}(i)
 	}
 	wg.Wait()
@@ -214,7 +223,7 @@ func (d *Dataset[I, O, M]) evaluate(ctx context.Context, task TaskFunc[I, O], c 
 		return nil, err
 	}
 
-	report := &EvaluationReport[I, O, M]{Name: name, ExperimentMetadata: c.Metadata}
+	report := &EvaluationReport[I, O, M]{Name: name, ExperimentMetadata: c.Metadata, DatasetName: d.Name}
 	for _, r := range results {
 		if r.failure != nil {
 			report.Failures = append(report.Failures, *r.failure)
@@ -238,6 +247,7 @@ func (d *Dataset[I, O, M]) runCase(
 	task TaskFunc[I, O],
 	t taskToRun[I, O, M],
 	taskName string,
+	taskTimeout time.Duration,
 	newLifecycle func(c Case[I, O, M]) Lifecycle[I, O, M],
 ) caseResult[I, O, M] {
 	var lc Lifecycle[I, O, M]
@@ -260,7 +270,7 @@ func (d *Dataset[I, O, M]) runCase(
 			}
 		}
 
-		ec, err := d.runTask(caseCtx, task, t.c, taskName)
+		ec, err := d.runTask(caseCtx, task, t.c, taskName, taskTimeout)
 		if err != nil {
 			result.failure = d.newFailure(t, err)
 			return
@@ -315,7 +325,7 @@ func (d *Dataset[I, O, M]) runCase(
 	return result
 }
 
-func (d *Dataset[I, O, M]) runTask(ctx context.Context, task TaskFunc[I, O], c Case[I, O, M], taskName string) (*EvaluatorContext[I, O, M], error) {
+func (d *Dataset[I, O, M]) runTask(ctx context.Context, task TaskFunc[I, O], c Case[I, O, M], taskName string, timeout time.Duration) (*EvaluatorContext[I, O, M], error) {
 	taskCtx, taskSpan := startTaskSpan(ctx, taskName)
 	defer taskSpan.End()
 
@@ -323,7 +333,7 @@ func (d *Dataset[I, O, M]) runTask(ctx context.Context, task TaskFunc[I, O], c C
 	taskCtx = withTaskRun(taskCtx, tr)
 
 	t0 := time.Now()
-	output, err := task(taskCtx, c.Inputs)
+	output, err := callTask(taskCtx, task, c.Inputs, timeout)
 	duration := time.Since(t0)
 	if err != nil {
 		recordSpanError(taskSpan, err)
@@ -342,6 +352,35 @@ func (d *Dataset[I, O, M]) runTask(ctx context.Context, task TaskFunc[I, O], c C
 		Attributes:        tr.attributes,
 		Metrics:           tr.metrics,
 	}, nil
+}
+
+// callTask runs task, giving up after timeout (if positive) even when the task
+// ignores its context.
+func callTask[I, O any](ctx context.Context, task TaskFunc[I, O], inputs I, timeout time.Duration) (O, error) {
+	if timeout <= 0 {
+		return task(ctx, inputs)
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, fmt.Errorf("task timed out after %s", timeout))
+	defer cancel()
+	type result struct {
+		output O
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		output, err := task(ctx, inputs)
+		done <- result{output, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil && ctx.Err() != nil {
+			return r.output, context.Cause(ctx)
+		}
+		return r.output, r.err
+	case <-ctx.Done():
+		var zero O
+		return zero, context.Cause(ctx)
+	}
 }
 
 func (d *Dataset[I, O, M]) newFailure(t taskToRun[I, O, M], err error) *ReportCaseFailure[I, O, M] {
