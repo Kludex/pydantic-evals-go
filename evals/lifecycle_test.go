@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -504,7 +504,7 @@ func TestOutputNamedPanicsOddArgs(t *testing.T) {
 			t.Fatalf("expected panic on odd argument count")
 		}
 	}()
-	evals.Named("only-name")
+	evals.Named("only-name") //nolint:staticcheck // odd pair count is the case under test
 }
 
 func TestOutputNamedPanicsNonStringName(t *testing.T) {

@@ -6,12 +6,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -83,17 +84,22 @@ func (flaky) Evaluate(_ context.Context, ec *evals.EvaluatorContext[string, stri
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	token := os.Getenv("LOGFIRE_TOKEN")
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "LOGFIRE_TOKEN is not set")
-		os.Exit(1)
+		return errors.New("LOGFIRE_TOKEN is not set")
 	}
 
 	ctx := context.Background()
 	shutdown, err := configureLogfire(ctx, token)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "configure logfire:", err)
-		os.Exit(1)
+		return fmt.Errorf("configure logfire: %w", err)
 	}
 	defer func() {
 		// Flush all buffered spans before exit.
@@ -138,8 +144,7 @@ func main() {
 		Repeat:   2,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "evaluate:", err)
-		os.Exit(1)
+		return fmt.Errorf("evaluate: %w", err)
 	}
 
 	report.Print(evals.RenderOptions{
@@ -151,4 +156,5 @@ func main() {
 		IncludeDurations:      true,
 	})
 	fmt.Printf("\n%d cases, %d failures\n", len(report.Cases), len(report.Failures))
+	return nil
 }

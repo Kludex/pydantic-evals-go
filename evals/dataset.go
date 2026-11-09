@@ -373,7 +373,7 @@ func callTask[I, O any](ctx context.Context, task TaskFunc[I, O], inputs I, time
 	}()
 	select {
 	case r := <-done:
-		if r.err != nil && ctx.Err() != nil {
+		if r.err != nil && ctx.Err() != nil { // pragma: no cover - races the ctx.Done case below
 			return r.output, context.Cause(ctx)
 		}
 		return r.output, r.err

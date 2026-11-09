@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -216,7 +216,7 @@ func Example_logfire() {
 	}
 	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(ctx) // flush buffered spans before exit
+	defer func() { _ = tp.Shutdown(ctx) }() // flush buffered spans before exit
 
 	s := evals.For[string, string, any]()
 	dataset := s.Dataset("capitals",

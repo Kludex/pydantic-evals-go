@@ -135,5 +135,5 @@ func scalarToAny(s Scalar) any {
 	case Label:
 		return string(v)
 	}
-	return nil // unreachable: Scalar is sealed
+	return nil // pragma: no cover - unreachable, Scalar is sealed
 }

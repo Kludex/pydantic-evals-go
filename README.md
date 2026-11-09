@@ -4,7 +4,7 @@
 
 ---
 
-**Documentation**: <a href="https://pkg.go.dev/github.com/Kludex/pydantic-evals-go">pkg.go.dev/github.com/Kludex/pydantic-evals-go</a>
+**Documentation**: <a href="https://pkg.go.dev/github.com/Kludex/pydantic-evals-go/evals">pkg.go.dev/github.com/Kludex/pydantic-evals-go/evals</a>
 
 **Source**: <a href="https://github.com/Kludex/pydantic-evals-go">github.com/Kludex/pydantic-evals-go</a>
 
@@ -17,7 +17,7 @@ It's like a test framework — but for code whose output you *can't* pin down wi
 ## Install
 
 ```bash
-go get github.com/Kludex/pydantic-evals-go
+go get github.com/Kludex/pydantic-evals-go/evals
 ```
 
 ## Example
@@ -31,7 +31,7 @@ import (
 	"context"
 	"os"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -117,7 +117,7 @@ Add it with `.With(Closeness{})`. Booleans become assertions, numbers become sco
 - **YAML/JSON** dataset save & load.
 - **OpenTelemetry** tracing, exportable to Logfire (shown above) — no-op until you configure a provider.
 
-See the [package documentation](https://pkg.go.dev/github.com/Kludex/pydantic-evals-go) for the full guide and runnable examples, and [`examples/`](./examples) for complete programs — including agents built on the OpenAI Go SDK, Genkit, and Eino, each evaluated and traced to Logfire.
+See the [package documentation](https://pkg.go.dev/github.com/Kludex/pydantic-evals-go/evals) for the full guide and runnable examples, and [`examples/`](./examples) for complete programs — including agents built on the OpenAI Go SDK, Genkit, and Eino, each evaluated and traced to Logfire.
 
 ## Scope
 

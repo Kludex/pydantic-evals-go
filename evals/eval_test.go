@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 )
 
 // ceEcho returns its input unchanged.
@@ -790,7 +790,7 @@ func TestNamedPanicOddArgs(t *testing.T) {
 			t.Fatal("expected panic on odd args")
 		}
 	}()
-	evals.Named("only")
+	evals.Named("only") //nolint:staticcheck // odd pair count is the case under test
 }
 
 func TestNamedPanicNonStringName(t *testing.T) {

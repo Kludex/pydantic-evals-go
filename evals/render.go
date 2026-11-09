@@ -165,8 +165,7 @@ func (r *EvaluationReport[I, O, M]) Print(opts ...RenderOptions) {
 
 // Fprint writes the rendered report to w.
 func (r *EvaluationReport[I, O, M]) Fprint(w io.Writer, opts ...RenderOptions) {
-	io.WriteString(w, r.Render(opts...))
-	io.WriteString(w, "\n")
+	_, _ = io.WriteString(w, r.Render(opts...)+"\n")
 }
 
 type reportColumns[I, O, M any] struct {
