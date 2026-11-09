@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -619,6 +621,9 @@ func TestTracingSpanTree(t *testing.T) {
 	if got := ltAttr(t, root, "dataset_name").AsString(); got != "greetings" {
 		t.Fatalf("dataset_name = %q, want %q", got, "greetings")
 	}
+	if got := ltAttr(t, root, "test.suite.name").AsString(); got != "greetings" {
+		t.Fatalf("test.suite.name = %q, want %q", got, "greetings")
+	}
 	if got := ltAttr(t, root, "n_cases").AsInt64(); got != 1 {
 		t.Fatalf("n_cases = %d, want 1", got)
 	}
@@ -639,6 +644,9 @@ func TestTracingSpanTree(t *testing.T) {
 	caseSpan := ltSpanByName(t, spans, "case: c1")
 	if !caseSpan.Parent().Equal(root.SpanContext()) {
 		t.Fatalf("case span parent is not the experiment span")
+	}
+	if got := ltAttr(t, caseSpan, "test.case.name").AsString(); got != "c1" {
+		t.Fatalf("test.case.name = %q, want c1", got)
 	}
 	var assertions map[string]any
 	if err := json.Unmarshal([]byte(ltAttr(t, caseSpan, "assertions").AsString()), &assertions); err != nil {
@@ -735,10 +743,189 @@ func TestTracingSourceCaseNameOnRepeat(t *testing.T) {
 	if got := ltAttr(t, second, "logfire.experiment.source_case_name").AsString(); got != "c1" {
 		t.Fatalf("source_case_name = %q, want c1", got)
 	}
+	for _, c := range []sdktrace.ReadOnlySpan{first, second} {
+		if got := ltAttr(t, c, "test.case.name").AsString(); got != "c1" {
+			t.Fatalf("test.case.name = %q, want c1", got)
+		}
+	}
 
 	root := ltSpanByName(t, spans, "evaluate task")
 	if got := ltAttr(t, root, "logfire.experiment.repeat").AsInt64(); got != 2 {
 		t.Fatalf("repeat attr = %d, want 2", got)
+	}
+}
+
+// ltClearCIEnv unsets every variable CI provenance detection reads, so tests
+// behave the same inside and outside CI.
+func ltClearCIEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"PYDANTIC_EVALS_CI_PROVENANCE", "PYDANTIC_EVALS_GIT_COMMIT_SHA", "PYDANTIC_EVALS_GIT_BRANCH",
+		"GITHUB_ACTIONS", "GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
+		"GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_HEAD_REF", "GITHUB_BASE_REF", "GITHUB_REF",
+		"GITHUB_SHA", "GITHUB_REF_TYPE", "GITHUB_REF_NAME",
+		"GITLAB_CI", "CI_PROJECT_URL", "CI_PIPELINE_URL", "CI_MERGE_REQUEST_IID", "CI_MERGE_REQUEST_EVENT_TYPE",
+		"CI_COMMIT_SHA", "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
+		"CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA", "CI_COMMIT_TAG",
+		"CI_COMMIT_BRANCH",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+// ltProvenance runs a one-case evaluation and returns the vcs.* and cicd.*
+// attributes recorded on the experiment span.
+func ltProvenance(t *testing.T, env map[string]string) map[string]string {
+	t.Helper()
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	sr := ltInstallRecorder(t)
+	s := evals.For[string, string, any]()
+	if _, err := s.Dataset("d", s.Case("hi")).Evaluate(context.Background(), ltEchoTask); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	got := map[string]string{}
+	for _, kv := range ltSpanByName(t, sr.Ended(), "evaluate task").Attributes() {
+		if k := string(kv.Key); strings.HasPrefix(k, "vcs.") || strings.HasPrefix(k, "cicd.") {
+			got[k] = kv.Value.AsString()
+		}
+	}
+	return got
+}
+
+func TestTracingCIProvenance(t *testing.T) {
+	eventPath := t.TempDir() + "/event.json"
+	payload := `{"pull_request": {"number": 7, "head": {"ref": "feature", "sha": "headsha"}, "base": {"ref": "main", "sha": "basesha"}}}`
+	if err := os.WriteFile(eventPath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sparsePath := t.TempDir() + "/sparse.json"
+	if err := os.WriteFile(sparsePath, []byte(`{"pull_request": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	invalidPath := t.TempDir() + "/invalid.json"
+	if err := os.WriteFile(invalidPath, []byte(`{"pull_request": {"number": "x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	github := map[string]string{
+		"GITHUB_ACTIONS": "true", "GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "o/r",
+		"GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "2",
+	}
+	with := func(base map[string]string, extra ...string) map[string]string {
+		out := map[string]string{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for i := 0; i < len(extra); i += 2 {
+			out[extra[i]] = extra[i+1]
+		}
+		return out
+	}
+	githubCommon := map[string]string{
+		"vcs.provider.name":          "github",
+		"vcs.repository.url.full":    "https://github.com/o/r",
+		"cicd.pipeline.run.url.full": "https://github.com/o/r/actions/runs/1/attempts/2",
+	}
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		want map[string]string
+	}{
+		{"none", nil, map[string]string{}},
+		{
+			"github pull request",
+			with(github, "GITHUB_EVENT_NAME", "pull_request", "GITHUB_EVENT_PATH", eventPath, "GITHUB_SHA", "mergesha"),
+			with(githubCommon, "vcs.ref.head.revision", "headsha", "vcs.ref.head.name", "feature",
+				"vcs.ref.head.type", "branch", "vcs.ref.base.name", "main", "vcs.ref.base.revision", "basesha",
+				"vcs.change.id", "7"),
+		},
+		{
+			"github pull request without payload",
+			with(github, "GITHUB_EVENT_NAME", "pull_request", "GITHUB_EVENT_PATH", eventPath+".missing",
+				"GITHUB_HEAD_REF", "feature", "GITHUB_BASE_REF", "main", "GITHUB_REF", "refs/pull/7/merge",
+				"GITHUB_SHA", "mergesha"),
+			with(githubCommon, "vcs.ref.head.name", "feature", "vcs.ref.head.type", "branch",
+				"vcs.ref.base.name", "main", "vcs.change.id", "7"),
+		},
+		{
+			"github pull request with sparse payload",
+			with(github, "GITHUB_EVENT_NAME", "pull_request", "GITHUB_EVENT_PATH", sparsePath,
+				"GITHUB_HEAD_REF", "feature", "GITHUB_BASE_REF", "main"),
+			with(githubCommon, "vcs.ref.head.name", "feature", "vcs.ref.head.type", "branch", "vcs.ref.base.name", "main"),
+		},
+		{
+			"github pull request with invalid payload",
+			with(github, "GITHUB_EVENT_NAME", "pull_request", "GITHUB_EVENT_PATH", invalidPath,
+				"GITHUB_HEAD_REF", "feature"),
+			with(githubCommon, "vcs.ref.head.name", "feature", "vcs.ref.head.type", "branch"),
+		},
+		{
+			"github push with overrides",
+			with(github, "GITHUB_EVENT_NAME", "push", "GITHUB_SHA", "sha", "GITHUB_REF_TYPE", "branch",
+				"GITHUB_REF_NAME", "main", "PYDANTIC_EVALS_GIT_COMMIT_SHA", "abc", "PYDANTIC_EVALS_GIT_BRANCH", "dev"),
+			with(githubCommon, "vcs.ref.head.revision", "abc", "vcs.ref.head.name", "dev", "vcs.ref.head.type", "branch"),
+		},
+		{
+			"github pull_request_target",
+			with(github, "GITHUB_EVENT_NAME", "pull_request_target", "GITHUB_EVENT_PATH", eventPath),
+			with(githubCommon, "vcs.ref.base.name", "main", "vcs.ref.base.revision", "basesha", "vcs.change.id", "7"),
+		},
+		{
+			"github tag push",
+			with(github, "GITHUB_EVENT_NAME", "push", "GITHUB_SHA", "sha", "GITHUB_REF_TYPE", "tag",
+				"GITHUB_REF_NAME", "v1"),
+			with(githubCommon, "vcs.ref.head.revision", "sha", "vcs.ref.head.name", "v1", "vcs.ref.head.type", "tag"),
+		},
+		{
+			"github issue_comment",
+			with(github, "GITHUB_EVENT_NAME", "issue_comment", "GITHUB_SHA", "sha"),
+			githubCommon,
+		},
+		{
+			"gitlab merged result",
+			map[string]string{"GITLAB_CI": "true", "CI_PROJECT_URL": "https://gitlab.com/o/r",
+				"CI_PIPELINE_URL": "https://gitlab.com/o/r/-/pipelines/1", "CI_MERGE_REQUEST_IID": "3",
+				"CI_MERGE_REQUEST_EVENT_TYPE": "merged_result", "CI_COMMIT_SHA": "mergesha",
+				"CI_MERGE_REQUEST_SOURCE_BRANCH_SHA": "headsha", "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME": "feature",
+				"CI_MERGE_REQUEST_TARGET_BRANCH_NAME": "main", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA": "basesha"},
+			map[string]string{"vcs.provider.name": "gitlab", "vcs.repository.url.full": "https://gitlab.com/o/r",
+				"cicd.pipeline.run.url.full": "https://gitlab.com/o/r/-/pipelines/1", "vcs.ref.head.revision": "headsha",
+				"vcs.ref.head.name": "feature", "vcs.ref.head.type": "branch", "vcs.ref.base.name": "main",
+				"vcs.ref.base.revision": "basesha", "vcs.change.id": "3"},
+		},
+		{
+			"gitlab tag",
+			map[string]string{"GITLAB_CI": "true", "CI_COMMIT_SHA": "sha", "CI_COMMIT_TAG": "v1"},
+			map[string]string{"vcs.provider.name": "gitlab", "vcs.ref.head.revision": "sha",
+				"vcs.ref.head.name": "v1", "vcs.ref.head.type": "tag"},
+		},
+		{
+			"gitlab branch",
+			map[string]string{"GITLAB_CI": "true", "CI_COMMIT_SHA": "sha", "CI_COMMIT_BRANCH": "main"},
+			map[string]string{"vcs.provider.name": "gitlab", "vcs.ref.head.revision": "sha",
+				"vcs.ref.head.name": "main", "vcs.ref.head.type": "branch"},
+		},
+		{
+			"overrides outside CI",
+			map[string]string{"PYDANTIC_EVALS_GIT_COMMIT_SHA": "abc", "PYDANTIC_EVALS_GIT_BRANCH": "dev"},
+			map[string]string{"vcs.ref.head.revision": "abc", "vcs.ref.head.name": "dev", "vcs.ref.head.type": "branch"},
+		},
+		{
+			"disabled",
+			map[string]string{"PYDANTIC_EVALS_CI_PROVENANCE": " Off ", "GITHUB_ACTIONS": "true"},
+			map[string]string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ltClearCIEnv(t)
+			got := ltProvenance(t, tt.env)
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Fatalf("provenance mismatch\n got: %v\nwant: %v", got, tt.want)
+			}
+		})
 	}
 }
 

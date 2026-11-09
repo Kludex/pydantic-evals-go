@@ -102,6 +102,8 @@ type EvaluationReport[I, O, M any] struct {
 	Failures []ReportCaseFailure[I, O, M]
 	// ExperimentMetadata associated with this experiment, if any.
 	ExperimentMetadata map[string]any
+	// DatasetName is the name of the dataset that produced this report, if it has one.
+	DatasetName string
 }
 
 // averageCases produces a synthetic summary case by averaging the given cases.

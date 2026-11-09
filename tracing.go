@@ -28,6 +28,8 @@ func startExperimentSpan(ctx context.Context, name, taskName, datasetName string
 		attribute.String("dataset_name", datasetName),
 		attribute.Int("n_cases", nCases),
 		attribute.String("gen_ai.operation.name", "experiment"),
+		// The OTel test semantic conventions: a dataset is a test suite, and each case a test case.
+		attribute.String("test.suite.name", datasetName),
 	}
 	if repeat > 1 {
 		attrs = append(attrs, attribute.Int("logfire.experiment.repeat", repeat))
@@ -35,7 +37,12 @@ func startExperimentSpan(ctx context.Context, name, taskName, datasetName string
 	if metadata != nil {
 		attrs = append(attrs, attribute.String("metadata", jsonString(metadata)))
 	}
-	return tracer().Start(ctx, "evaluate "+name, trace.WithAttributes(attrs...))
+	ctx, span := tracer().Start(ctx, "evaluate "+name, trace.WithAttributes(attrs...))
+	// Only when recording, since detection may read the GitHub Actions event payload file.
+	if span.IsRecording() {
+		span.SetAttributes(ciProvenanceAttributes()...)
+	}
+	return ctx, span
 }
 
 // setExperimentResultAttributes records the assertion pass rate on the
@@ -51,6 +58,12 @@ func startCaseSpan(ctx context.Context, taskName, caseName string, inputs, metad
 		attribute.String("case_name", caseName),
 		attribute.String("inputs", jsonString(inputs)),
 	}
+	// Repeats of one case share its name, as they run the same test case.
+	testCaseName := caseName
+	if sourceCaseName != "" {
+		testCaseName = sourceCaseName
+	}
+	attrs = append(attrs, attribute.String("test.case.name", testCaseName))
 	if hasMeta {
 		attrs = append(attrs, attribute.String("metadata", jsonString(metadata)))
 	}
