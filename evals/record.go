@@ -46,7 +46,7 @@ func IncrementMetric(ctx context.Context, name string, amount float64) {
 // "wrapError".
 func errorType(err error) string {
 	t := reflect.TypeOf(err)
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t.Name()

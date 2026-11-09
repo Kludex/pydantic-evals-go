@@ -94,7 +94,7 @@ func evaluatorVersion[I, O, M any](e Evaluator[I, O, M]) string {
 // used as its default report/spec name.
 func evaluatorTypeName(e any) string {
 	t := reflect.TypeOf(e)
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t.Name()

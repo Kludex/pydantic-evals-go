@@ -30,10 +30,10 @@ type Float float64
 // Label is a [Scalar] categorical result.
 type Label string
 
-func (Bool) isScalar()  {}
-func (Int) isScalar()   {}
-func (Float) isScalar() {}
-func (Label) isScalar() {}
+func (Bool) isScalar()  {} // pragma: no cover - seal marker, never called
+func (Int) isScalar()   {} // pragma: no cover - seal marker, never called
+func (Float) isScalar() {} // pragma: no cover - seal marker, never called
+func (Label) isScalar() {} // pragma: no cover - seal marker, never called
 
 func (b Bool) String() string {
 	if b {

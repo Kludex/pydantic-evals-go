@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/schema"
 	"go.opentelemetry.io/otel"

@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	evals "github.com/Kludex/pydantic-evals-go"
+	"github.com/Kludex/pydantic-evals-go/evals"
 )
 
 // matchAnswer scores 1.0 for an exact match, 0.8 for a case-insensitive
