@@ -11,7 +11,8 @@ import (
 // Python `EvaluatorSpec`:
 //
 //   - "MyEvaluator" — the bare name, when there are no arguments;
-//   - {"MyEvaluator": arg} — a single positional argument;
+//   - {"MyEvaluator": arg} — a single positional argument, unless it is a
+//     string-keyed map, which is read as keyword arguments as below;
 //   - {"MyEvaluator": {k1: v1, k2: v2}} — keyword arguments.
 //
 // Args holds a single positional argument (length 0 or 1); Kwargs holds keyword
