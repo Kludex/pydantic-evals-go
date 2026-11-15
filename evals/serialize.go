@@ -87,23 +87,19 @@ func (r *Registry[I, O, M]) RegisterDefaults() {
 	})
 	r.Register("MaxDuration", func(spec EvaluatorSpec) (Evaluator[I, O, M], error) {
 		e := MaxDuration[I, O, M]{}
-		var seconds float64
+		var seconds any
 		if len(spec.Args) == 1 {
-			f, err := toFloat(spec.Args[0])
-			if err != nil {
-				return nil, fmt.Errorf("MaxDuration seconds: %w", err)
-			}
-			seconds = f
+			seconds = spec.Args[0]
 		} else if v, ok := spec.Kwargs["seconds"]; ok {
-			f, err := toFloat(v)
-			if err != nil {
-				return nil, fmt.Errorf("MaxDuration seconds: %w", err)
-			}
-			seconds = f
+			seconds = v
 		} else {
 			return nil, fmt.Errorf("MaxDuration requires seconds")
 		}
-		e.Max = secondsToDuration(seconds)
+		d, err := decodeDuration(seconds)
+		if err != nil {
+			return nil, fmt.Errorf("MaxDuration seconds: %w", err)
+		}
+		e.Max = d
 		return e, nil
 	})
 }
