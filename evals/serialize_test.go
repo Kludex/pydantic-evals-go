@@ -497,7 +497,7 @@ func TestLoadFactoryInstantiateErrors(t *testing.T) {
 		{
 			name: "maxduration non-numeric seconds",
 			data: "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: notanumber\n",
-			want: `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration seconds: expected a number, got string`,
+			want: `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration seconds: expected a number or ISO-8601 duration, got "notanumber"`,
 		},
 	}
 	for _, tt := range tests {
@@ -540,7 +540,44 @@ func TestLoadMaxDurationKwargsNonNumeric(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	assertContains(t, err.Error(), `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration seconds: expected a number, got string`)
+	assertContains(t, err.Error(), `failed to instantiate evaluator "MaxDuration" for dataset: MaxDuration seconds: expected a number or ISO-8601 duration, got "notanumber"`)
+}
+
+// MaxDuration reads the ISO-8601 strings Python writes for timedelta values.
+func TestLoadMaxDurationISO8601(t *testing.T) {
+	tests := map[string]time.Duration{
+		"PT5S":           5 * time.Second,
+		"PT0S":           0,
+		"PT1H":           time.Hour,
+		"P2DT1H1M1.5S":   49*time.Hour + time.Minute + 1500*time.Millisecond,
+		"-PT1S":          -time.Second,
+		"P1W":            7 * 24 * time.Hour,
+		"{seconds: P1D}": 24 * time.Hour,
+	}
+	for value, want := range tests {
+		t.Run(value, func(t *testing.T) {
+			ds := loadString(t, "name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: "+value+"\n", LoadOptions[string, string, string]{})
+			if got := ds.Evaluators[0].(MaxDuration[string, string, string]).Max; got != want {
+				t.Fatalf("Max = %v, want %v", got, want)
+			}
+		})
+	}
+	t.Run("non-number", func(t *testing.T) {
+		err := loadStringErr("name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: {seconds: true}\n", LoadOptions[string, string, string]{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		assertContains(t, err.Error(), "MaxDuration seconds: expected a number, got bool")
+	})
+	for _, value := range []string{"P", "PT", "P1DT", "P1.2.3D", "pt5s"} {
+		t.Run(value, func(t *testing.T) {
+			err := loadStringErr("name: d\ncases:\n  - inputs: x\nevaluators:\n  - MaxDuration: "+value+"\n", LoadOptions[string, string, string]{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			assertContains(t, err.Error(), "expected a number or ISO-8601 duration, got \""+value+"\"")
+		})
+	}
 }
 
 // EqualsExpected carries its evaluation_name through the kwargs form on load.
