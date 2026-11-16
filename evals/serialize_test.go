@@ -385,6 +385,27 @@ func TestLoadFormatInference(t *testing.T) {
 	}
 }
 
+func TestLoadUTF8BOM(t *testing.T) {
+	for format, data := range map[string]string{
+		"yaml": "name: bom\ncases:\n  - name: café ✓ 日本\n    inputs: x\n",
+		"json": `{"name":"bom","cases":[{"name":"café ✓ 日本","inputs":"x"}]}`,
+	} {
+		for _, f := range []string{format, ""} {
+			ds := loadString(t, "\ufeff"+data, LoadOptions[string, string, string]{Format: f})
+			if ds.Name != "bom" || ds.Cases[0].Name != "café ✓ 日本" {
+				t.Fatalf("BOM %s load wrong: %+v", format, ds)
+			}
+		}
+	}
+	for _, data := range []string{"\xef", "\xef\xbb"} {
+		for _, format := range []string{"json", "yaml"} {
+			if loadStringErr(data, LoadOptions[string, string, string]{Format: format}) == nil {
+				t.Fatalf("truncated BOM %q as %s loaded", data, format)
+			}
+		}
+	}
+}
+
 func TestLoadDefaultName(t *testing.T) {
 	ds := loadString(t, "cases:\n  - inputs: x\n", LoadOptions[string, string, string]{DefaultName: "fallback"})
 	if ds.Name != "fallback" {
