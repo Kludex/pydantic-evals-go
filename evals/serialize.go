@@ -1,6 +1,7 @@
 package evals
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -161,7 +162,11 @@ type LoadOptions[I, O, M any] struct {
 // Inputs, expected outputs and metadata are decoded with the Decode* hooks in
 // opts; when a hook is nil the deserialized value is converted to the target
 // type via a JSON round-trip.
+//
+// A leading UTF-8 byte order mark is ignored, so files re-saved by editors
+// that add one still load.
 func LoadDataset[I, O, M any](data []byte, reg *Registry[I, O, M], opts LoadOptions[I, O, M]) (*Dataset[I, O, M], error) {
+	data = bytes.TrimPrefix(data, []byte("\ufeff"))
 	format := opts.Format
 	if format == "" {
 		if strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
